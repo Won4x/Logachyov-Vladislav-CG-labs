@@ -11,4 +11,5 @@ public:
     void Clear(const Vec3f& color);
     void SetPixel(int x, int y, const Vec3f& color);
     void SavePPM(const char* filename);
+    void BlendPixel(int x, int y, const Vec3f& color, float alpha);
 };

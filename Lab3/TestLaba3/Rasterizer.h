@@ -10,3 +10,12 @@ void DrawTriangle(
     Image& image,
     ZBuffer& zbuffer
 );
+
+void DrawTriangleTransparent(
+    Vec4f clip[3],
+    const Vec3f& color,
+    float alpha,
+    Image& image,
+    ZBuffer& zbuffer
+);
+

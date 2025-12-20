@@ -24,3 +24,11 @@ void Image::SavePPM(const char* filename) {
             << int(p.z * 255) << "\n";
     }
 }
+
+void Image::BlendPixel(int x, int y, const Vec3f& color, float alpha) {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+
+    Vec3f& dst = pixels[x + y * width];
+    dst = dst * (1.f - alpha) + color * alpha;
+}
+
