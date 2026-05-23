@@ -1,5 +1,8 @@
 // GeneratedCubeRenderer.cpp
 #include "GeneratedCubeRenderer.h"
+#include <algorithm>
+#include <cstdio>
+#include <cwctype>
 
 namespace
 {
@@ -45,6 +48,122 @@ namespace
         }
 
         return 0;
+    }
+
+    std::wstring ToLower(std::wstring text)
+    {
+        std::transform(text.begin(), text.end(), text.begin(),
+            [](wchar_t ch) { return (wchar_t)towlower(ch); });
+        return text;
+    }
+
+    bool HasExtension(const std::wstring& filename, const std::wstring& extension)
+    {
+        const std::wstring lower = ToLower(filename);
+        return lower.size() >= extension.size()
+            && lower.compare(lower.size() - extension.size(), extension.size(), extension) == 0;
+    }
+
+    bool LoadTgaPixels(const std::wstring& filename, UINT& width, UINT& height, std::vector<uint8_t>& rgbaPixels)
+    {
+#pragma pack(push, 1)
+        struct TgaHeader
+        {
+            uint8_t IdLength;
+            uint8_t ColorMapType;
+            uint8_t ImageType;
+            uint16_t ColorMapFirstEntry;
+            uint16_t ColorMapLength;
+            uint8_t ColorMapEntrySize;
+            uint16_t XOrigin;
+            uint16_t YOrigin;
+            uint16_t Width;
+            uint16_t Height;
+            uint8_t PixelDepth;
+            uint8_t ImageDescriptor;
+        };
+#pragma pack(pop)
+
+        static_assert(sizeof(TgaHeader) == 18, "Unexpected TGA header size");
+
+        FILE* file = nullptr;
+        if (_wfopen_s(&file, filename.c_str(), L"rb") != 0 || file == nullptr)
+            return false;
+
+        TgaHeader header{};
+        if (fread(&header, 1, sizeof(header), file) != sizeof(header)
+            || header.Width == 0 || header.Height == 0)
+        {
+            fclose(file);
+            return false;
+        }
+
+        const bool isColor = header.ImageType == 2;
+        const bool isGray = header.ImageType == 3;
+        if ((!isColor && !isGray) || header.ColorMapType != 0)
+        {
+            fclose(file);
+            return false;
+        }
+
+        const UINT bytesPerPixel = header.PixelDepth / 8;
+        if ((isColor && bytesPerPixel != 3 && bytesPerPixel != 4) || (isGray && bytesPerPixel != 1))
+        {
+            fclose(file);
+            return false;
+        }
+
+        if (fseek(file, header.IdLength, SEEK_CUR) != 0)
+        {
+            fclose(file);
+            return false;
+        }
+
+        width = header.Width;
+        height = header.Height;
+
+        const size_t srcStride = (size_t)width * bytesPerPixel;
+        std::vector<uint8_t> src(srcStride * height);
+        if (fread(src.data(), 1, src.size(), file) != src.size())
+        {
+            fclose(file);
+            return false;
+        }
+
+        fclose(file);
+
+        rgbaPixels.assign((size_t)width * height * 4, 255);
+
+        const bool topOrigin = (header.ImageDescriptor & 0x20) != 0;
+        for (UINT y = 0; y < height; ++y)
+        {
+            const UINT srcY = topOrigin ? y : (height - 1 - y);
+            const uint8_t* srcRow = src.data() + (size_t)srcY * srcStride;
+            uint8_t* dstRow = rgbaPixels.data() + (size_t)y * width * 4;
+
+            for (UINT x = 0; x < width; ++x)
+            {
+                const uint8_t* s = srcRow + (size_t)x * bytesPerPixel;
+                uint8_t* d = dstRow + (size_t)x * 4;
+
+                if (isGray)
+                {
+                    d[0] = s[0];
+                    d[1] = s[0];
+                    d[2] = s[0];
+                    d[3] = 255;
+                }
+                else
+                {
+                    d[0] = s[2];
+                    d[1] = s[1];
+                    d[2] = s[0];
+                    d[3] = bytesPerPixel == 4 ? s[3] : 255;
+                }
+            }
+        }
+
+        return true;
     }
 }
 
@@ -101,7 +220,7 @@ void CubeRenderer::FitModelToView()
     const float maxSize = (std::max)(sizeX, (std::max)(sizeY, sizeZ));
 
     // Final model size on screen. Increase 10.0f to make imported OBJ bigger.
-    mModelScale = maxSize > 0.0001f ? 10.0f / maxSize : 1.0f;
+    mModelScale = maxSize > 0.0001f ? 150.0f / maxSize : 1.0f;
 }
 
 void CubeRenderer::BuildModelGeometry()
@@ -231,50 +350,61 @@ bool LoadTextureFromFile(ID3D12Device* device,
     ComPtr<ID3D12Resource>& texture,
     ComPtr<ID3D12Resource>& upload)
 {
-    HRESULT initHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    if (FAILED(initHr) && initHr != RPC_E_CHANGED_MODE)
-        return false;
-
-    ComPtr<IWICImagingFactory> factory;
-    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory2, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
-    if (FAILED(hr))
-        return false;
-
-    ComPtr<IWICBitmapDecoder> decoder;
-    hr = factory->CreateDecoderFromFilename(filename.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder);
-    if (FAILED(hr))
-        return false;
-
-    ComPtr<IWICBitmapFrameDecode> frame;
-    if (FAILED(decoder->GetFrame(0, &frame)))
-        return false;
-
     UINT width = 0;
     UINT height = 0;
-    frame->GetSize(&width, &height);
+    std::vector<uint8_t> pixels;
+    DXGI_FORMAT dxgiFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
-    WICPixelFormatGUID srcFormat;
-    frame->GetPixelFormat(&srcFormat);
-
-    ComPtr<IWICBitmapSource> bitmapSource = frame;
-    DXGI_FORMAT dxgiFormat = WicToDxgiFormat(srcFormat);
-    if (srcFormat != GUID_WICPixelFormat32bppRGBA)
+    if (HasExtension(filename, L".tga"))
     {
-        ComPtr<IWICFormatConverter> converter;
-        if (FAILED(factory->CreateFormatConverter(&converter)))
+        if (!LoadTgaPixels(filename, width, height, pixels))
             return false;
-
-        if (FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA,
-            WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom)))
-            return false;
-
-        bitmapSource = converter;
-        dxgiFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     }
+    else
+    {
+        HRESULT initHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (FAILED(initHr) && initHr != RPC_E_CHANGED_MODE)
+            return false;
 
-    std::vector<uint8_t> pixels((size_t)width * height * 4);
-    if (FAILED(bitmapSource->CopyPixels(nullptr, width * 4, (UINT)pixels.size(), pixels.data())))
-        return false;
+        ComPtr<IWICImagingFactory> factory;
+        HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory2, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+        if (FAILED(hr))
+            return false;
+
+        ComPtr<IWICBitmapDecoder> decoder;
+        hr = factory->CreateDecoderFromFilename(filename.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder);
+        if (FAILED(hr))
+            return false;
+
+        ComPtr<IWICBitmapFrameDecode> frame;
+        if (FAILED(decoder->GetFrame(0, &frame)))
+            return false;
+
+        frame->GetSize(&width, &height);
+
+        WICPixelFormatGUID srcFormat;
+        frame->GetPixelFormat(&srcFormat);
+
+        ComPtr<IWICBitmapSource> bitmapSource = frame;
+        dxgiFormat = WicToDxgiFormat(srcFormat);
+        if (srcFormat != GUID_WICPixelFormat32bppRGBA)
+        {
+            ComPtr<IWICFormatConverter> converter;
+            if (FAILED(factory->CreateFormatConverter(&converter)))
+                return false;
+
+            if (FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA,
+                WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom)))
+                return false;
+
+            bitmapSource = converter;
+            dxgiFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+        }
+
+        pixels.resize((size_t)width * height * 4);
+        if (FAILED(bitmapSource->CopyPixels(nullptr, width * 4, (UINT)pixels.size(), pixels.data())))
+            return false;
+    }
 
     CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
     auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(dxgiFormat, width, height);
