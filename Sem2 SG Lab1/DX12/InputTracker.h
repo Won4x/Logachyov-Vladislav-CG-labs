@@ -35,6 +35,7 @@ private:
     POINT mPrevMousePos{ 0,0 };
     POINT mMouseDelta{ 0,0 };
 
+    int mWheelAccum = 0;
     int mWheelDelta = 0;
 
 private:

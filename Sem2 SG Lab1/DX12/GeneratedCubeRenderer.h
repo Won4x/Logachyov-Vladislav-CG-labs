@@ -24,6 +24,12 @@ struct ObjectConstants
     float      TextureScaleX;
     float      TextureScaleY;
     XMFLOAT2   TextureOffset;
+    float      pad1;
+    float      pad2;
+    float      pad3;
+
+    // x = time, y = curtain enable, z = wind strength, w = wave speed.
+    XMFLOAT4   WindParams;
 };
 
 class CubeRenderer
@@ -87,6 +93,7 @@ private:
         XMFLOAT4 Specular = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
         float Shininess = 16.0f;
         UINT TextureIndex = 0;
+        bool IsCurtain = false;
     };
 
     struct RenderSubset

@@ -15,8 +15,8 @@ void InputDevice::BeginFrame()
     mPrevMouse[1] = mCurrMouse[1];
     mPrevMouse[2] = mCurrMouse[2];
 
-    
-    mWheelDelta = 0;
+    mWheelDelta = mWheelAccum;
+    mWheelAccum = 0;
 
     
     mMouseDelta.x = mMousePos.x - mPrevMousePos.x;
@@ -49,7 +49,7 @@ void InputDevice::ProcessMessage(UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_MOUSEWHEEL:
     {
-        mWheelDelta += GET_WHEEL_DELTA_WPARAM(wParam); 
+        mWheelAccum += GET_WHEEL_DELTA_WPARAM(wParam); 
     } break;
 
     default: break;

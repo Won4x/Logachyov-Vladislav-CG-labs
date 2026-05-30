@@ -12,7 +12,10 @@ cbuffer ObjectCB : register(b0)
     float gShininess;      // MTL Ns.
     float gTextureScaleX;
     float gTextureScaleY;
-    float2 gTextureOffset;
+    float gTextureOffsetX;
+    float gTextureOffsetY;
+    float3 gWindPadding;
+    float4 gWindParams;
 };
 
 Texture2D gDiffuseMap : register(t0);

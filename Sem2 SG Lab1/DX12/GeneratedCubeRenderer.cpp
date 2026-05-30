@@ -1,6 +1,7 @@
 // GeneratedCubeRenderer.cpp
 #include "GeneratedCubeRenderer.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cwctype>
 
@@ -62,6 +63,24 @@ namespace
         const std::wstring lower = ToLower(filename);
         return lower.size() >= extension.size()
             && lower.compare(lower.size() - extension.size(), extension.size(), extension) == 0;
+    }
+
+    std::string ToLower(std::string text)
+    {
+        std::transform(text.begin(), text.end(), text.begin(),
+            [](unsigned char ch) { return (char)std::tolower(ch); });
+        return text;
+    }
+
+    bool IsCurtainMaterial(const ObjMaterialData& material)
+    {
+        const std::string name = ToLower(material.Name);
+        const std::wstring texture = ToLower(material.DiffuseTexture);
+
+        return name == "fabric_c"
+            || name == "fabric_f"
+            || name == "fabric_g"
+            || texture.find(L"curtain") != std::wstring::npos;
     }
 
     bool LoadTgaPixels(const std::wstring& filename, UINT& width, UINT& height, std::vector<uint8_t>& rgbaPixels)
@@ -220,7 +239,7 @@ void CubeRenderer::FitModelToView()
     const float maxSize = (std::max)(sizeX, (std::max)(sizeY, sizeZ));
 
     // Final model size on screen. Increase 10.0f to make imported OBJ bigger.
-    mModelScale = maxSize > 0.0001f ? 150.0f / maxSize : 1.0f;
+    mModelScale = maxSize > 0.0001f ? 250.0f / maxSize : 1.0f;
 }
 
 void CubeRenderer::BuildModelGeometry()
@@ -447,6 +466,7 @@ void CubeRenderer::BuildTextureResources()
         dst.Diffuse = src.Diffuse;
         dst.Specular = src.Specular;
         dst.Shininess = src.Shininess;
+        dst.IsCurtain = IsCurtainMaterial(src);
 
         if (!src.DiffuseTexture.empty() && FileExists(src.DiffuseTexture))
         {
@@ -620,7 +640,7 @@ void CubeRenderer::UpdateCubeRotation(const InputDevice& input, float)
     if (input.IsMouseDown(0))
     {
         // Left mouse drag rotation speed for the model.
-        const float rotSpeed = 0.01f;
+        const float rotSpeed = input.IsKeyDown(VK_CONTROL) ? 0.004f : 0.008f;
         POINT md = input.MouseDelta();
         mCubeYaw += md.x * rotSpeed;
         mCubePitch += md.y * rotSpeed;
@@ -633,15 +653,20 @@ void CubeRenderer::UpdateCubeRotation(const InputDevice& input, float)
 
 void CubeRenderer::UpdateCamera(const InputDevice& input, float dt)
 {
-    // WASD movement speed and right mouse look sensitivity.
-    const float moveSpeed = 5.0f;
-    const float mouseSens = 0.0025f;
+    // RMB looks around. WASD moves, Q/E moves down/up, wheel zooms.
+    float moveSpeed = 8.0f;
+    if (input.IsKeyDown(VK_SHIFT))
+        moveSpeed *= 3.0f;
+    if (input.IsKeyDown(VK_CONTROL))
+        moveSpeed *= 0.25f;
+
+    const float mouseSens = input.IsKeyDown(VK_CONTROL) ? 0.0012f : 0.0032f;
 
     if (input.IsMouseDown(1))
     {
         POINT md = input.MouseDelta();
         mYaw += md.x * mouseSens;
-        mPitch += md.y * mouseSens;
+        mPitch -= md.y * mouseSens;
 
         const float limit = XM_PIDIV2 - 0.1f;
         if (mPitch > limit)  mPitch = limit;
@@ -662,6 +687,12 @@ void CubeRenderer::UpdateCamera(const InputDevice& input, float dt)
     if (input.IsKeyDown('S')) pos -= forward * moveSpeed * dt;
     if (input.IsKeyDown('A')) pos -= right * moveSpeed * dt;
     if (input.IsKeyDown('D')) pos += right * moveSpeed * dt;
+    if (input.IsKeyDown('Q')) pos -= up * moveSpeed * dt;
+    if (input.IsKeyDown('E')) pos += up * moveSpeed * dt;
+
+    const float wheelSteps = (float)input.WheelDelta() / 120.0f;
+    if (wheelSteps != 0.0f)
+        pos += forward * (wheelSteps * moveSpeed * 0.45f);
 
     XMStoreFloat3(&mCameraPos, pos);
 }
@@ -702,6 +733,8 @@ void CubeRenderer::Update(float totalTime, float deltaTime, const InputDevice& i
 
     // Texture animation: x scroll speed, y small sine-wave wobble.
     mConstants.TextureOffset = XMFLOAT2(totalTime * 0.08f, sinf(totalTime * 0.5f) * 0.05f);
+
+    mConstants.WindParams = XMFLOAT4(totalTime, 0.0f, 3.0f, 3.0f);
 }
 
 void CubeRenderer::UploadConstants(UINT bufferIndex)
@@ -731,6 +764,7 @@ void CubeRenderer::Draw(ID3D12GraphicsCommandList* cmdList)
         mConstants.DiffuseColor = material.Diffuse;
         mConstants.SpecularColor = material.Specular;
         mConstants.Shininess = material.Shininess;
+        mConstants.WindParams.y = material.IsCurtain ? 1.0f : 0.0f;
         UploadConstants(i);
 
         CD3DX12_GPU_DESCRIPTOR_HANDLE textureHandle(mSrvHeap->GetGPUDescriptorHandleForHeapStart());

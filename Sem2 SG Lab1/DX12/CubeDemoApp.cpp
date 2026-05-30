@@ -4,6 +4,7 @@
 CubeApp::CubeApp(HINSTANCE hInstance)
     : D3DApp(hInstance)
 {
+    mMainWndCaption = L"CG lab1 | RMB camera | LMB model | WASD QE move | Wheel zoom | Shift fast | Ctrl precise";
 }
 
 CubeApp::~CubeApp()
