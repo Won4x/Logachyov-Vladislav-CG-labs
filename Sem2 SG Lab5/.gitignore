@@ -1,0 +1,38 @@
+.vs/
+
+# Visual Studio build output
+[Bb]in/
+[Oo]bj/
+x64/
+x86/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+
+# C/C++ build artifacts
+*.obj
+*.pdb
+*.ilk
+*.ipch
+*.iobj
+*.ipdb
+*.tlog
+*.log
+*.recipe
+*.lastbuildstate
+
+# Compiled shaders and executables
+*.exe
+*.dll
+*.cso
+
+# Keep source and project files tracked
+!DX12/*.cpp
+!DX12/*.h
+!DX12/*.hlsl
+!DX12/*.vcxproj
+!DX12/*.vcxproj.filters
+!*.sln
