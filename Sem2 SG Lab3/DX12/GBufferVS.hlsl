@@ -8,6 +8,7 @@ cbuffer GeometryCB : register(b0)
     float4 gTextureTransform; // xy = scale, zw = offset.
     float4 gEyeDisplacement;  // xyz = eye position, w = displacement scale.
     float4 gTessellationParams; // x=max, y=min, z=near distance, w=far distance.
+    float4 gDemoSphereParams;
 };
 
 struct VSInput

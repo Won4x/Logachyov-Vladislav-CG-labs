@@ -8,6 +8,7 @@ cbuffer GeometryCB : register(b0)
     float4 gTextureTransform;
     float4 gEyeDisplacement;
     float4 gTessellationParams;
+    float4 gDemoSphereParams;
 };
 
 Texture2D gDisplacementMap : register(t2);
@@ -48,9 +49,18 @@ DSOutput DSMain(PatchConstants patchConstants,
     float3 tangentW = normalize(patch[0].TangentW * bary.x + patch[1].TangentW * bary.y + patch[2].TangentW * bary.z);
     float2 tex = patch[0].Tex * bary.x + patch[1].Tex * bary.y + patch[2].Tex * bary.z;
 
-    float height = dot(gDisplacementMap.SampleLevel(gSampler, tex, 0.0f).rgb, float3(0.299f, 0.587f, 0.114f));
-    float centeredHeight = height - 0.5f;
-    float3 displacedLocalPos = localPos + normalW * (centeredHeight * gEyeDisplacement.w);
+    if (gMaterialParams.w > 0.5f)
+    {
+        float3 sphereDir = normalize(localPos - gDemoSphereParams.xyz);
+        localPos = gDemoSphereParams.xyz + sphereDir * gDemoSphereParams.w;
+        normalW = normalize(mul(float4(sphereDir, 0.0f), gWorld).xyz);
+        tangentW = normalize(tangentW - normalW * dot(tangentW, normalW));
+    }
+
+    float height = gDisplacementMap.SampleLevel(gSampler, tex, 0.0f).r - 0.5f;
+    float displacementScale = gMaterialParams.z * gMaterialParams.w * gEyeDisplacement.w;
+    float3 displacedLocalPos = localPos + normalW * (height * displacementScale);
+
     float4 posW = mul(float4(displacedLocalPos, 1.0f), gWorld);
 
     output.PosW = posW.xyz;

@@ -8,6 +8,7 @@ cbuffer GeometryCB : register(b0)
     float4 gTextureTransform;
     float4 gEyeDisplacement;
     float4 gTessellationParams;
+    float4 gDemoSphereParams;
 };
 
 Texture2D gDiffuseMap : register(t0);
@@ -43,8 +44,15 @@ GBufferOutput PSMain(PSInput pin)
     float3 normalW = SafeNormalize(pin.NormalW);
     float3 tangentW = SafeNormalize(pin.TangentW - normalW * dot(pin.TangentW, normalW));
     float3 bitangentW = SafeNormalize(cross(normalW, tangentW));
-    float3 normalSample = gNormalMap.Sample(gSampler, pin.Tex).xyz * 2.0f - 1.0f;
-    normalW = SafeNormalize(normalSample.x * tangentW + normalSample.y * bitangentW + normalSample.z * normalW);
+    if (gMaterialParams.w > 0.5f)
+    {
+        float3 normalSample = gNormalMap.Sample(gSampler, pin.Tex).xyz * 2.0f - 1.0f;
+        float normalStrength = max(gMaterialParams.y, 1.0f);
+        normalSample.xy *= normalStrength;
+        normalSample.z = lerp(normalSample.z, 0.35f, saturate((normalStrength - 1.0f) / 5.0f));
+        normalSample = SafeNormalize(normalSample);
+        normalW = SafeNormalize(normalSample.x * tangentW + normalSample.y * bitangentW + normalSample.z * normalW);
+    }
 
     output.AlbedoSpec = float4(texColor.rgb * gDiffuseColor.rgb, saturate(max(max(gSpecularColor.r, gSpecularColor.g), gSpecularColor.b)));
     output.NormalShininess = float4(normalW * 0.5f + 0.5f, saturate(gMaterialParams.x / 256.0f));

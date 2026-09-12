@@ -93,5 +93,17 @@
     <None Include="GBufferPS.hlsl" />
     <None Include="DeferredLightingVS.hlsl" />
     <None Include="DeferredLightingPS.hlsl" />
+    <None Include="Assets\DisplacementSphere\Sphere.obj">
+      <Filter>Models</Filter>
+    </None>
+    <None Include="Assets\DisplacementSphere\BrickDiffuse.jpg">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
+    <None Include="Assets\DisplacementSphere\BrickNormal.png">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
+    <None Include="Assets\DisplacementSphere\BrickDisplacement.png">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
   </ItemGroup>
 </Project>

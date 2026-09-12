@@ -8,6 +8,7 @@ cbuffer GeometryCB : register(b0)
     float4 gTextureTransform;
     float4 gEyeDisplacement;
     float4 gTessellationParams;
+    float4 gDemoSphereParams;
 };
 
 struct HSInput

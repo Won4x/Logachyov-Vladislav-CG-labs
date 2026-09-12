@@ -178,7 +178,6 @@ static void LoadMtlFile(const std::wstring& path, ObjMeshData& out)
             {
                 std::wstring texturePath = CombinePath(GetDirectoryName(path), Utf8ToWide(textureName));
                 current->NormalTexture = texturePath;
-                current->DisplacementTexture = texturePath;
             }
         }
     }

@@ -30,10 +30,11 @@ namespace
     {
         const std::wstring candidates[] =
         {
-            L"Models/sponza.obj",
-            L"../x64/Debug/Models/sponza.obj",
-            L"x64/Debug/Models/sponza.obj",
-            L"../../x64/Debug/Models/sponza.obj"
+            L"D:\\3D Models\\Monkey.obj",
+            L"Models/Monkey.obj",
+            L"../x64/Debug/Models/Monkey.obj",
+            L"x64/Debug/Models/Monkey.obj",
+            L"../../x64/Debug/Models/Monkey.obj"
         };
 
         for (const auto& candidate : candidates)
@@ -356,7 +357,7 @@ void RenderingSystem::FitModelToView()
 
 void RenderingSystem::BuildSceneObjects()
 {
-    const UINT objectCount = 200u;
+    const UINT objectCount = 2500u;
     mSceneObjects.clear();
     mSceneObjects.reserve(objectCount);
     mVisibleObjectIndices.reserve(objectCount);

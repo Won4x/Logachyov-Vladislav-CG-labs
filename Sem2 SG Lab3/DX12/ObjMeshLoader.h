@@ -17,6 +17,7 @@ struct ObjMaterialData
     XMFLOAT4 Diffuse = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);
     XMFLOAT4 Specular = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
     float Shininess = 16.0f;
+    float DisplacementScale = 0.0f;
     std::wstring DiffuseTexture;
     std::wstring NormalTexture;
     std::wstring DisplacementTexture;

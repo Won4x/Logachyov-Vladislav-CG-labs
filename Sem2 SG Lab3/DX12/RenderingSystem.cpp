@@ -2,13 +2,24 @@
 #include <algorithm>
 #include <cstdio>
 #include <cwctype>
+#include <cmath>
+#include <initializer_list>
 
 namespace
 {
+    const std::string DisplacementSphereMaterialName = "DisplacementBrickSphere";
+
     bool FileExists(const std::wstring& path)
     {
         DWORD attributes = GetFileAttributesW(path.c_str());
         return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+    }
+
+    DXGI_FORMAT WicToDxgiFormat(WICPixelFormatGUID format)
+    {
+        if (format == GUID_WICPixelFormat32bppRGBA) return DXGI_FORMAT_R8G8B8A8_UNORM;
+        if (format == GUID_WICPixelFormat32bppBGRA) return DXGI_FORMAT_B8G8R8A8_UNORM;
+        return DXGI_FORMAT_R8G8B8A8_UNORM;
     }
 
     std::wstring ToLower(std::wstring text)
@@ -44,6 +55,17 @@ namespace
         return L"";
     }
 
+    std::wstring FindFirstExistingPath(std::initializer_list<std::wstring> candidates)
+    {
+        for (const auto& candidate : candidates)
+        {
+            if (FileExists(candidate))
+                return candidate;
+        }
+
+        return L"";
+    }
+
     UINT FindMaterialIndex(const ObjMeshData& mesh, const std::string& name)
     {
         for (UINT i = 0; i < (UINT)mesh.Materials.size(); ++i)
@@ -53,6 +75,132 @@ namespace
         }
 
         return 0;
+    }
+
+    XMFLOAT3 ComputeMeshCenter(const std::vector<VertexPosNormal>& vertices)
+    {
+        if (vertices.empty())
+            return XMFLOAT3(0.0f, 0.0f, 0.0f);
+
+        XMFLOAT3 minP = vertices[0].Pos;
+        XMFLOAT3 maxP = vertices[0].Pos;
+        for (const auto& vertex : vertices)
+        {
+            minP.x = (std::min)(minP.x, vertex.Pos.x);
+            minP.y = (std::min)(minP.y, vertex.Pos.y);
+            minP.z = (std::min)(minP.z, vertex.Pos.z);
+            maxP.x = (std::max)(maxP.x, vertex.Pos.x);
+            maxP.y = (std::max)(maxP.y, vertex.Pos.y);
+            maxP.z = (std::max)(maxP.z, vertex.Pos.z);
+        }
+
+        return XMFLOAT3(
+            0.5f * (minP.x + maxP.x),
+            0.5f * (minP.y + maxP.y),
+            0.5f * (minP.z + maxP.z));
+    }
+
+    float ComputeMeshMaxSize(const std::vector<VertexPosNormal>& vertices)
+    {
+        if (vertices.empty())
+            return 1.0f;
+
+        XMFLOAT3 minP = vertices[0].Pos;
+        XMFLOAT3 maxP = vertices[0].Pos;
+        for (const auto& vertex : vertices)
+        {
+            minP.x = (std::min)(minP.x, vertex.Pos.x);
+            minP.y = (std::min)(minP.y, vertex.Pos.y);
+            minP.z = (std::min)(minP.z, vertex.Pos.z);
+            maxP.x = (std::max)(maxP.x, vertex.Pos.x);
+            maxP.y = (std::max)(maxP.y, vertex.Pos.y);
+            maxP.z = (std::max)(maxP.z, vertex.Pos.z);
+        }
+
+        return (std::max)(maxP.x - minP.x, (std::max)(maxP.y - minP.y, maxP.z - minP.z));
+    }
+
+    void AddDisplacementSphere(ObjMeshData& mesh, XMFLOAT4& sphereParams)
+    {
+        ObjMeshData sphere;
+        const std::wstring spherePath = FindFirstExistingPath(
+            {
+                L"Assets/DisplacementSphere/Sphere.obj",
+                L"DX12/Assets/DisplacementSphere/Sphere.obj",
+                L"../DX12/Assets/DisplacementSphere/Sphere.obj",
+                L"../../DX12/Assets/DisplacementSphere/Sphere.obj"
+            });
+        if (spherePath.empty() || !ObjLoader::LoadObjPosNormal(spherePath, sphere, true))
+            return;
+
+        for (auto& material : mesh.Materials)
+        {
+            material.NormalTexture.clear();
+            material.DisplacementTexture.clear();
+        }
+
+        const XMFLOAT3 sceneCenter = ComputeMeshCenter(mesh.Vertices);
+        const float sceneSize = ComputeMeshMaxSize(mesh.Vertices);
+        const XMFLOAT3 sphereCenter = ComputeMeshCenter(sphere.Vertices);
+        const float sphereSize = ComputeMeshMaxSize(sphere.Vertices);
+        const float targetRadius = (std::max)(sceneSize * 0.12f, 2.0f);
+        const float sphereScale = sphereSize > 0.0001f ? (targetRadius * 2.0f) / sphereSize : 1.0f;
+        const XMFLOAT3 targetCenter(
+            sceneCenter.x,
+            sceneCenter.y + targetRadius * 1.6f,
+            sceneCenter.z - sceneSize * 0.42f);
+        sphereParams = XMFLOAT4(targetCenter.x, targetCenter.y, targetCenter.z, targetRadius);
+
+        ObjMaterialData material;
+        material.Name = DisplacementSphereMaterialName;
+        material.Diffuse = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+        material.Specular = XMFLOAT4(0.9f, 0.9f, 0.9f, 1.0f);
+        material.Shininess = 96.0f;
+        material.DisplacementScale = targetRadius * 0.08f;
+        material.DiffuseTexture = FindFirstExistingPath(
+            {
+                L"Assets/DisplacementSphere/BrickDiffuse.jpg",
+                L"DX12/Assets/DisplacementSphere/BrickDiffuse.jpg",
+                L"../DX12/Assets/DisplacementSphere/BrickDiffuse.jpg",
+                L"../../DX12/Assets/DisplacementSphere/BrickDiffuse.jpg"
+            });
+        material.NormalTexture = FindFirstExistingPath(
+            {
+                L"Assets/DisplacementSphere/BrickNormal.png",
+                L"DX12/Assets/DisplacementSphere/BrickNormal.png",
+                L"../DX12/Assets/DisplacementSphere/BrickNormal.png",
+                L"../../DX12/Assets/DisplacementSphere/BrickNormal.png"
+            });
+        material.DisplacementTexture = FindFirstExistingPath(
+            {
+                L"Assets/DisplacementSphere/BrickDisplacement.png",
+                L"DX12/Assets/DisplacementSphere/BrickDisplacement.png",
+                L"../DX12/Assets/DisplacementSphere/BrickDisplacement.png",
+                L"../../DX12/Assets/DisplacementSphere/BrickDisplacement.png"
+            });
+
+        mesh.Materials.push_back(material);
+
+        ObjSubset subset;
+        subset.MaterialName = DisplacementSphereMaterialName;
+        subset.IndexStart = (uint32_t)mesh.Indices.size();
+
+        const uint32_t baseVertex = (uint32_t)mesh.Vertices.size();
+        for (auto vertex : sphere.Vertices)
+        {
+            vertex.Pos.x = (vertex.Pos.x - sphereCenter.x) * sphereScale + targetCenter.x;
+            vertex.Pos.y = (vertex.Pos.y - sphereCenter.y) * sphereScale + targetCenter.y;
+            vertex.Pos.z = (vertex.Pos.z - sphereCenter.z) * sphereScale + targetCenter.z;
+            vertex.TexC.x *= 3.0f;
+            vertex.TexC.y *= 2.0f;
+            mesh.Vertices.push_back(vertex);
+        }
+
+        for (uint32_t index : sphere.Indices)
+            mesh.Indices.push_back(baseVertex + index);
+
+        subset.IndexCount = (uint32_t)sphere.Indices.size();
+        mesh.Subsets.push_back(subset);
     }
 
     bool LoadTgaPixels(const std::wstring& filename, UINT& width, UINT& height, std::vector<uint8_t>& rgbaPixels)
@@ -150,6 +298,7 @@ namespace
         UINT width = 0;
         UINT height = 0;
         std::vector<uint8_t> pixels;
+        DXGI_FORMAT dxgiFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
         if (HasExtension(filename, L".tga"))
         {
@@ -158,11 +307,52 @@ namespace
         }
         else
         {
-            return false;
+            HRESULT initHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            if (FAILED(initHr) && initHr != RPC_E_CHANGED_MODE)
+                return false;
+
+            ComPtr<IWICImagingFactory> factory;
+            HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory2, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+            if (FAILED(hr))
+                return false;
+
+            ComPtr<IWICBitmapDecoder> decoder;
+            hr = factory->CreateDecoderFromFilename(filename.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder);
+            if (FAILED(hr))
+                return false;
+
+            ComPtr<IWICBitmapFrameDecode> frame;
+            if (FAILED(decoder->GetFrame(0, &frame)))
+                return false;
+
+            frame->GetSize(&width, &height);
+
+            WICPixelFormatGUID srcFormat;
+            frame->GetPixelFormat(&srcFormat);
+
+            ComPtr<IWICBitmapSource> bitmapSource = frame;
+            dxgiFormat = WicToDxgiFormat(srcFormat);
+            if (srcFormat != GUID_WICPixelFormat32bppRGBA)
+            {
+                ComPtr<IWICFormatConverter> converter;
+                if (FAILED(factory->CreateFormatConverter(&converter)))
+                    return false;
+
+                if (FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA,
+                    WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom)))
+                    return false;
+
+                bitmapSource = converter;
+                dxgiFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+            }
+
+            pixels.resize((size_t)width * height * 4);
+            if (FAILED(bitmapSource->CopyPixels(nullptr, width * 4, (UINT)pixels.size(), pixels.data())))
+                return false;
         }
 
         CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
-        auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R8G8B8A8_UNORM, width, height);
+        auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(dxgiFormat, width, height);
         if (FAILED(device->CreateCommittedResource(
             &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &texDesc,
             D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture))))
@@ -275,6 +465,8 @@ void RenderingSystem::BuildModelGeometry()
         mMeshData.Subsets.clear();
         mMeshData.Subsets.push_back(subset);
     }
+
+    AddDisplacementSphere(mMeshData, mDisplacementSphereParams);
 
     mIndexCount = (UINT)mMeshData.Indices.size();
     const UINT vBufferSize = (UINT)(mMeshData.Vertices.size() * sizeof(VertexPosNormal));
@@ -410,6 +602,8 @@ void RenderingSystem::BuildTextureResources()
         dst.Diffuse = src.Diffuse;
         dst.Specular = src.Specular;
         dst.Shininess = src.Shininess;
+        dst.DisplacementScale = src.DisplacementScale;
+        dst.IsDisplacementSphere = src.Name == DisplacementSphereMaterialName;
 
         auto loadTextureIndex = [&](const std::wstring& path, UINT& index)
         {
@@ -782,9 +976,10 @@ void RenderingSystem::Update(float, float deltaTime, const InputDevice& input)
 
     XMStoreFloat4x4(&mGeometryConstants.WorldViewProj, XMMatrixTranspose(wvp));
     XMStoreFloat4x4(&mGeometryConstants.World, XMMatrixTranspose(world));
-    mGeometryConstants.TextureTransform = XMFLOAT4(4.0f, 4.0f, 0.0f, 0.0f);
-    mGeometryConstants.EyeDisplacement = XMFLOAT4(mCameraPos.x, mCameraPos.y, mCameraPos.z, 0.35f);
-    mGeometryConstants.TessellationParams = XMFLOAT4(8.0f, 1.0f, 55.0f, 330.0f);
+    mGeometryConstants.TextureTransform = XMFLOAT4(1.0f, 1.0f, 0.0f, 0.0f);
+    mGeometryConstants.EyeDisplacement = XMFLOAT4(mCameraPos.x, mCameraPos.y, mCameraPos.z, 1.0f);
+    mGeometryConstants.TessellationParams = XMFLOAT4(128.0f, 1.0f, 10.0f, 75.0f);
+    mGeometryConstants.DemoSphereParams = mDisplacementSphereParams;
     mLightingConstants.EyePosW = mCameraPos;
 }
 
@@ -837,7 +1032,11 @@ void RenderingSystem::Draw(ID3D12GraphicsCommandList* cmdList,
         const RenderMaterial& material = mRenderMaterials[subset.MaterialIndex];
         mGeometryConstants.DiffuseColor = material.Diffuse;
         mGeometryConstants.SpecularColor = material.Specular;
-        mGeometryConstants.MaterialParams = XMFLOAT4(material.Shininess, 0.0f, 0.0f, 0.0f);
+        mGeometryConstants.MaterialParams = XMFLOAT4(
+            material.Shininess,
+            material.IsDisplacementSphere ? 2.0f : 0.0f,
+            material.DisplacementScale,
+            material.IsDisplacementSphere ? 1.0f : 0.0f);
         UploadGeometryConstants(i);
 
         CD3DX12_GPU_DESCRIPTOR_HANDLE textureHandle(mTextureHeap->GetGPUDescriptorHandleForHeapStart());

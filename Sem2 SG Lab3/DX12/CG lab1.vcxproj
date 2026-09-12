@@ -52,6 +52,10 @@
     <None Include="GBufferDS.hlsl" />
     <None Include="ModelVS.hlsl" />
     <None Include="ModelPS.hlsl" />
+    <None Include="Assets\DisplacementSphere\Sphere.obj" />
+    <None Include="Assets\DisplacementSphere\BrickDiffuse.jpg" />
+    <None Include="Assets\DisplacementSphere\BrickNormal.png" />
+    <None Include="Assets\DisplacementSphere\BrickDisplacement.png" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -166,6 +170,8 @@
   <Target Name="CopyRuntimeShaders" AfterTargets="Build">
     <MakeDir Directories="$(OutDir)Shaders" />
     <Copy SourceFiles="CubeVS.hlsl;CubePS.hlsl;ModelVS.hlsl;ModelPS.hlsl;GBufferVS.hlsl;GBufferHS.hlsl;GBufferDS.hlsl;GBufferPS.hlsl;DeferredLightingVS.hlsl;DeferredLightingPS.hlsl" DestinationFolder="$(OutDir)Shaders" SkipUnchangedFiles="true" />
+    <MakeDir Directories="$(OutDir)Assets\DisplacementSphere" />
+    <Copy SourceFiles="Assets\DisplacementSphere\Sphere.obj;Assets\DisplacementSphere\BrickDiffuse.jpg;Assets\DisplacementSphere\BrickNormal.png;Assets\DisplacementSphere\BrickDisplacement.png" DestinationFolder="$(OutDir)Assets\DisplacementSphere" SkipUnchangedFiles="true" />
   </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
