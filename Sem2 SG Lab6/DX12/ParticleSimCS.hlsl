@@ -14,7 +14,7 @@ cbuffer ParticleSimCB : register(b0)
 {
     float4 gEmitterPositionTime; // xyz = emitter, w = total time.
     float4 gGravityDeltaTime;    // xyz = gravity, w = delta time.
-    float4 gEmitterParams;       // x = pool size, y = spawn chance, z = base lifetime, w = velocity spread.
+    float4 gEmitterParams;       // x = pool size, y = fall flag, z = base lifetime, w = velocity spread.
 };
 
 ConsumeStructuredBuffer<Particle> gInputParticles : register(u0);
@@ -77,41 +77,30 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     Particle p = gInputParticles.Consume();
     float dt = gGravityDeltaTime.w;
+    bool falling = gEmitterParams.y > 0.5f;
 
-    float currentLifetime = max(0.05f, gEmitterParams.z * max(p.LifetimeScale, 0.1f));
-
-    if (p.Age > 0.0f && p.Age < currentLifetime)
+    if (p.Age < 0.0f)
     {
-        uint forceSeed = Hash(p.Seed + (uint)(p.Age * 120.0f) * 747796405u);
-        float3 turbulence = float3(
-            Random01(forceSeed) - 0.5f,
-            (Random01(forceSeed) - 0.5f) * 0.35f,
-            Random01(forceSeed) - 0.5f) * 9.0f;
+        if (falling)
+        {
+            uint state = Hash(p.Seed + id * 747796405u);
+            p.Age = 0.0001f;
+            p.Velocity = float3(
+                (Random01(state) - 0.5f) * 0.65f,
+                -0.2f - Random01(state) * 0.75f,
+                (Random01(state) - 0.5f) * 0.65f);
+        }
+    }
 
-        p.Velocity += (gGravityDeltaTime.xyz + turbulence) * dt;
+    if (p.Age >= 0.0f)
+    {
+        p.Velocity += gGravityDeltaTime.xyz * dt;
         p.Position += p.Velocity * dt;
         p.Age += dt;
-        p.Size += dt * 0.18f;
 
-        float life = saturate(p.Age / currentLifetime);
-        p.Color.rgb = lerp(float3(1.0f, 0.52f, 0.08f), float3(0.85f, 0.05f, 0.02f), life);
+        float fade = saturate(p.Age / max(gEmitterParams.z, 0.05f));
+        p.Color.rgb = lerp(float3(1.0f, 0.55f, 0.08f), float3(0.35f, 0.12f, 0.04f), fade);
         p.Color.a = 1.0f;
-
-        if (p.Position.y < 1.0f || p.Age >= currentLifetime)
-            p.Age = 0.0f;
-    }
-    else
-    {
-        p.Seed = Hash(p.Seed + id * 1664525u + (uint)(gEmitterPositionTime.w * 1000.0f));
-        uint spawnSeed = p.Seed;
-        float spawn = Random01(spawnSeed);
-        if (spawn < gEmitterParams.y)
-            p = SpawnParticle(spawnSeed);
-        else
-        {
-            p.Age = 0.0f;
-            p.Seed = spawnSeed;
-        }
     }
 
     gOutputParticles.Append(p);

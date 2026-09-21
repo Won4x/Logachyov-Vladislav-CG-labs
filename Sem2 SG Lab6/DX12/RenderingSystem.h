@@ -220,6 +220,7 @@ private:
     float mParticleSpread = 18.0f;
     float mParticleSizeScale = 1.7f;
     float mParticleGravity = -8.0f;
+    bool mParticlesFalling = false;
     XMFLOAT3 mModelCenter = { 0.0f, 0.0f, 0.0f };
     float mModelScale = 1.0f;
     UINT mSelectedLight = 1;

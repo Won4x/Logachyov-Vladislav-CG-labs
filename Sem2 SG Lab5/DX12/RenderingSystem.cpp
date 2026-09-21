@@ -1,6 +1,7 @@
 #include "RenderingSystem.h"
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <cwctype>
 #include <sstream>
@@ -8,10 +9,10 @@
 namespace
 {
     constexpr UINT CascadeCount = 4;
-    constexpr UINT ShadowMapSize = 2048;
+    constexpr UINT ShadowMapSize = 1024;
     constexpr float ShadowNearZ = 0.1f;
-    constexpr float ShadowFarZ = 850.0f;
-    constexpr float CascadeSplitLambda = 0.78f;
+    constexpr float ShadowFarZ = 10.0f;
+    constexpr float CascadeSplitLambda = 0.2f;
 
     bool FileExists(const std::wstring& path)
     {
@@ -166,7 +167,37 @@ namespace
         }
         else
         {
-            return false;
+            HRESULT initHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            if (FAILED(initHr) && initHr != RPC_E_CHANGED_MODE)
+                return false;
+
+            ComPtr<IWICImagingFactory> factory;
+            HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory2, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+            if (FAILED(hr))
+                return false;
+
+            ComPtr<IWICBitmapDecoder> decoder;
+            hr = factory->CreateDecoderFromFilename(filename.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder);
+            if (FAILED(hr))
+                return false;
+
+            ComPtr<IWICBitmapFrameDecode> frame;
+            if (FAILED(decoder->GetFrame(0, &frame)))
+                return false;
+
+            frame->GetSize(&width, &height);
+
+            ComPtr<IWICFormatConverter> converter;
+            if (FAILED(factory->CreateFormatConverter(&converter)))
+                return false;
+
+            if (FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA,
+                WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom)))
+                return false;
+
+            pixels.resize((size_t)width * height * 4);
+            if (FAILED(converter->CopyPixels(nullptr, width * 4, (UINT)pixels.size(), pixels.data())))
+                return false;
         }
 
         CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
@@ -236,6 +267,7 @@ void RenderingSystem::BuildResources(UINT width, UINT height)
     BuildOctree();
     BuildTextureResources();
     BuildShadowResources();
+    BuildCascadeOverlayTextures();
     BuildConstantBuffers();
     BuildGeometryRootSignature();
     BuildShadowRootSignature();
@@ -747,13 +779,45 @@ void RenderingSystem::BuildShadowResources()
     mShadowScissorRect = { 0, 0, (LONG)ShadowMapSize, (LONG)ShadowMapSize };
 }
 
+void RenderingSystem::BuildCascadeOverlayTextures()
+{
+    const std::wstring texturePaths[CascadeCount] =
+    {
+        L"Models\\pngtree-isolated-cat-on-white-background-png-image_9158356.png",
+        L"Models\\pngtree-golden-retriever-dog-pictures-png-image_15147078.png",
+        L"Models\\0_62512_fdf426b7_orig.png",
+        L"Models\\pngtree-dolphin-png-image_20331571.png"
+    };
+
+    mCascadeOverlayTextures.clear();
+    mCascadeOverlayUploads.clear();
+    mCascadeOverlayTextures.reserve(CascadeCount);
+    mCascadeOverlayUploads.reserve(CascadeCount);
+
+    for (UINT i = 0; i < CascadeCount; ++i)
+    {
+        ComPtr<ID3D12Resource> texture;
+        ComPtr<ID3D12Resource> upload;
+        if (LoadTextureFromFile(mDevice, mCmdList, texturePaths[i], texture, upload))
+        {
+            mCascadeOverlayTextures.push_back(texture);
+            mCascadeOverlayUploads.push_back(upload);
+        }
+        else
+        {
+            mCascadeOverlayTextures.push_back(mTextures.empty() ? nullptr : mTextures[0]);
+            mCascadeOverlayUploads.push_back(nullptr);
+        }
+    }
+}
+
 void RenderingSystem::BuildLightingDescriptors()
 {
     if (!mGbuffer || !mShadowMap)
         return;
 
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-    srvHeapDesc.NumDescriptors = Gbuffer::TargetCount + 1;
+    srvHeapDesc.NumDescriptors = Gbuffer::TargetCount + 1 + CascadeCount;
     srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ThrowIfFailed(mDevice->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mLightingSrvHeap)));
@@ -774,6 +838,22 @@ void RenderingSystem::BuildLightingDescriptors()
     shadowSrvDesc.Texture2DArray.FirstArraySlice = 0;
     shadowSrvDesc.Texture2DArray.ArraySize = CascadeCount;
     mDevice->CreateShaderResourceView(mShadowMap.Get(), &shadowSrvDesc, dst);
+    dst.Offset(1, mSrvDescriptorSize);
+
+    for (UINT i = 0; i < CascadeCount; ++i)
+    {
+        ID3D12Resource* texture = i < (UINT)mCascadeOverlayTextures.size() ? mCascadeOverlayTextures[i].Get() : nullptr;
+        if (!texture && !mTextures.empty())
+            texture = mTextures[0].Get();
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format = texture ? texture->GetDesc().Format : DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+        mDevice->CreateShaderResourceView(texture, &srvDesc, dst);
+        dst.Offset(1, mSrvDescriptorSize);
+    }
 }
 
 void RenderingSystem::BuildGeometryRootSignature()
@@ -844,7 +924,7 @@ void RenderingSystem::BuildLightingRootSignature()
 
     D3D12_DESCRIPTOR_RANGE shadowTable = {};
     shadowTable.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    shadowTable.NumDescriptors = 1;
+    shadowTable.NumDescriptors = 1 + CascadeCount;
     shadowTable.BaseShaderRegister = 3;
     shadowTable.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
@@ -1299,7 +1379,17 @@ void RenderingSystem::UpdateShadowMatrices(const XMMATRIX& view, const XMMATRIX&
             center += corner;
         center /= 8.0f;
 
+        float cascadeRadius = 0.0f;
+        for (XMVECTOR corner : corners)
+        {
+            XMVECTOR distance = XMVector3Length(corner - center);
+            cascadeRadius = (std::max)(cascadeRadius, XMVectorGetX(distance));
+        }
+        cascadeRadius = ceilf(cascadeRadius * 16.0f) / 16.0f;
+
         XMMATRIX lightView = XMMatrixLookAtLH(center - lightDir * ShadowFarZ, center, up);
+        XMFLOAT3 centerLightSpace;
+        XMStoreFloat3(&centerLightSpace, XMVector3TransformCoord(center, lightView));
 
         XMFLOAT3 minP(FLT_MAX, FLT_MAX, FLT_MAX);
         XMFLOAT3 maxP(-FLT_MAX, -FLT_MAX, -FLT_MAX);
@@ -1315,6 +1405,13 @@ void RenderingSystem::UpdateShadowMatrices(const XMMATRIX& view, const XMMATRIX&
             maxP.z = (std::max)(maxP.z, p.z);
         }
 
+        const float cascadeDiameter = cascadeRadius * 2.0f;
+        const float texelSize = cascadeDiameter / (float)ShadowMapSize;
+        minP.x = floorf((centerLightSpace.x - cascadeRadius) / texelSize) * texelSize;
+        minP.y = floorf((centerLightSpace.y - cascadeRadius) / texelSize) * texelSize;
+        maxP.x = minP.x + cascadeDiameter;
+        maxP.y = minP.y + cascadeDiameter;
+
         const float zPadding = 240.0f;
         XMMATRIX lightProj = XMMatrixOrthographicOffCenterLH(
             minP.x, maxP.x,
@@ -1327,7 +1424,7 @@ void RenderingSystem::UpdateShadowMatrices(const XMMATRIX& view, const XMMATRIX&
     }
 
     mLightingConstants.CascadeSplits = XMFLOAT4(splitDepths[0], splitDepths[1], splitDepths[2], splitDepths[3]);
-    mLightingConstants.ShadowTexelSizeBias = XMFLOAT4(1.0f / (float)ShadowMapSize, 0.0007f, 0.0018f, 0.045f);
+    mLightingConstants.ShadowTexelSizeBias = XMFLOAT4(1.0f / (float)ShadowMapSize, 0.0007f, 0.0018f, 0.02f);
 }
 
 std::wstring RenderingSystem::StatusText() const

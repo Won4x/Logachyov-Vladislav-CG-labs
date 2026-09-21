@@ -80,6 +80,9 @@ private:
     void BuildLights();
     void UploadGeometryConstants(UINT bufferIndex, const GeometryConstants& constants);
     void UploadLightingConstants();
+    void DrawTopDownInset(ID3D12GraphicsCommandList* cmdList,
+        D3D12_CPU_DESCRIPTOR_HANDLE backBufferView,
+        D3D12_CPU_DESCRIPTOR_HANDLE depthStencilView);
     void UpdateCamera(const InputDevice& input, float dt);
     void UpdateLightControls(const InputDevice& input, float dt);
     void UpdateCullingMode(const InputDevice& input);
@@ -137,6 +140,7 @@ private:
     ComPtr<ID3D12RootSignature> mLightingRootSignature;
     ComPtr<ID3D12PipelineState> mGeometryPSO;
     ComPtr<ID3D12PipelineState> mLightingPSO;
+    ComPtr<ID3D12PipelineState> mTopDownPSO;
 
     GeometryConstants mGeometryConstants = {};
     LightingConstants mLightingConstants = {};

@@ -6,12 +6,14 @@ struct Light
     float4 Params;
 };
 
+#define MAX_DEFERRED_LIGHTS 128
+
 cbuffer LightingCB : register(b0)
 {
     float3 gEyePosW;
     float gLightCount;
     float4 gAmbientColor;
-    Light gLights[16];
+    Light gLights[MAX_DEFERRED_LIGHTS];
 };
 
 Texture2D gAlbedoSpec : register(t0);
@@ -81,7 +83,7 @@ float4 PSMain(PSInput pin) : SV_Target
 
     float3 lighting = gAmbientColor.rgb;
     [loop]
-    for (int i = 0; i < (int)gLightCount && i < 16; ++i)
+    for (int i = 0; i < (int)gLightCount && i < MAX_DEFERRED_LIGHTS; ++i)
         lighting += EvaluateLight(gLights[i], position.xyz, normal, viewDir, specularStrength, shininess);
 
     float3 color = albedo * lighting;

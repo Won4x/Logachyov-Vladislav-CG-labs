@@ -15,6 +15,7 @@ struct GeometryConstants
     XMFLOAT4 EyeDisplacement;
     XMFLOAT4 TessellationParams;
     XMFLOAT4 DemoSphereParams;
+    XMFLOAT4 WaterParams;
 };
 
 struct DeferredLight
@@ -56,10 +57,12 @@ private:
         XMFLOAT4 Specular = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
         float Shininess = 16.0f;
         float DisplacementScale = 0.0f;
+        float Alpha = 1.0f;
         UINT TextureIndex = 0;
         UINT NormalTextureIndex = 1;
         UINT DisplacementTextureIndex = 2;
         bool IsDisplacementSphere = false;
+        bool IsWater = false;
     };
 
     struct RenderSubset
@@ -115,6 +118,7 @@ private:
     ComPtr<ID3D12RootSignature> mLightingRootSignature;
     ComPtr<ID3D12PipelineState> mGeometryPSO;
     ComPtr<ID3D12PipelineState> mLightingPSO;
+    ComPtr<ID3D12PipelineState> mWaterPSO;
 
     GeometryConstants mGeometryConstants = {};
     LightingConstants mLightingConstants = {};
@@ -126,5 +130,6 @@ private:
     XMFLOAT3 mModelCenter = { 0.0f, 0.0f, 0.0f };
     float mModelScale = 1.0f;
     XMFLOAT4 mDisplacementSphereParams = XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f);
+    float mTotalTime = 0.0f;
     UINT mSelectedLight = 1;
 };

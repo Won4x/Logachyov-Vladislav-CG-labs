@@ -52,6 +52,8 @@
     <None Include="GBufferDS.hlsl" />
     <None Include="ModelVS.hlsl" />
     <None Include="ModelPS.hlsl" />
+    <None Include="TopDownVS.hlsl" />
+    <None Include="TopDownPS.hlsl" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -166,7 +168,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Target Name="CopyRuntimeShaders" AfterTargets="Build">
     <MakeDir Directories="$(OutDir)Shaders" />
-    <Copy SourceFiles="CubeVS.hlsl;CubePS.hlsl;ModelVS.hlsl;ModelPS.hlsl;GBufferVS.hlsl;GBufferHS.hlsl;GBufferDS.hlsl;GBufferPS.hlsl;DeferredLightingVS.hlsl;DeferredLightingPS.hlsl" DestinationFolder="$(OutDir)Shaders" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="CubeVS.hlsl;CubePS.hlsl;ModelVS.hlsl;ModelPS.hlsl;GBufferVS.hlsl;GBufferHS.hlsl;GBufferDS.hlsl;GBufferPS.hlsl;DeferredLightingVS.hlsl;DeferredLightingPS.hlsl;TopDownVS.hlsl;TopDownPS.hlsl" DestinationFolder="$(OutDir)Shaders" SkipUnchangedFiles="true" />
   </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

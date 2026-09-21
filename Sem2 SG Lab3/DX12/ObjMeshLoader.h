@@ -18,6 +18,7 @@ struct ObjMaterialData
     XMFLOAT4 Specular = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
     float Shininess = 16.0f;
     float DisplacementScale = 0.0f;
+    float Alpha = 1.0f;
     std::wstring DiffuseTexture;
     std::wstring NormalTexture;
     std::wstring DisplacementTexture;

@@ -8,6 +8,7 @@
 namespace
 {
     const std::string DisplacementSphereMaterialName = "DisplacementBrickSphere";
+    const std::string WaterMaterialName = "TessellatedWater";
 
     bool FileExists(const std::wstring& path)
     {
@@ -200,6 +201,90 @@ namespace
             mesh.Indices.push_back(baseVertex + index);
 
         subset.IndexCount = (uint32_t)sphere.Indices.size();
+        mesh.Subsets.push_back(subset);
+    }
+
+    void AddTessellatedWaterPlane(ObjMeshData& mesh)
+    {
+        if (mesh.Vertices.empty())
+            return;
+
+        const XMFLOAT3 sceneCenter = ComputeMeshCenter(mesh.Vertices);
+        const float sceneSize = ComputeMeshMaxSize(mesh.Vertices);
+        const float halfWidth = sceneSize * 0.34f;
+        const float halfDepth = sceneSize * 0.22f;
+        const float waterY = sceneCenter.y - sceneSize * 0.23f;
+        const float waterX = sceneCenter.x + sceneSize * 0.78f;
+        const float waterZ = sceneCenter.z + sceneSize * 0.05f;
+        const float uvRepeatX = 3.5f;
+        const float uvRepeatY = 2.0f;
+
+        ObjMaterialData material;
+        material.Name = WaterMaterialName;
+        material.Diffuse = XMFLOAT4(0.18f, 0.55f, 0.72f, 0.42f);
+        material.Specular = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+        material.Shininess = 180.0f;
+        material.DisplacementScale = sceneSize * 0.032f;
+        material.Alpha = 0.42f;
+        material.DiffuseTexture = FindFirstExistingPath(
+            {
+                L"Assets/Water/WaterDiffuse.png",
+                L"DX12/Assets/Water/WaterDiffuse.png",
+                L"../DX12/Assets/Water/WaterDiffuse.png",
+                L"../../DX12/Assets/Water/WaterDiffuse.png"
+            });
+        material.NormalTexture = FindFirstExistingPath(
+            {
+                L"Assets/Water/WaterNormal.png",
+                L"DX12/Assets/Water/WaterNormal.png",
+                L"../DX12/Assets/Water/WaterNormal.png",
+                L"../../DX12/Assets/Water/WaterNormal.png"
+            });
+        material.DisplacementTexture = FindFirstExistingPath(
+            {
+                L"Assets/Water/WaterDisplacement.png",
+                L"DX12/Assets/Water/WaterDisplacement.png",
+                L"../DX12/Assets/Water/WaterDisplacement.png",
+                L"../../DX12/Assets/Water/WaterDisplacement.png"
+            });
+        mesh.Materials.push_back(material);
+
+        const XMFLOAT3 normal(0.0f, 1.0f, 0.0f);
+        const XMFLOAT3 tangent(1.0f, 0.0f, 0.0f);
+        const uint32_t baseVertex = (uint32_t)mesh.Vertices.size();
+        const int grid = 4;
+        for (int z = 0; z <= grid; ++z)
+        {
+            const float v = (float)z / (float)grid;
+            for (int x = 0; x <= grid; ++x)
+            {
+                const float u = (float)x / (float)grid;
+                const float px = waterX - halfWidth + u * halfWidth * 2.0f;
+                const float pz = waterZ - halfDepth + v * halfDepth * 2.0f;
+                mesh.Vertices.push_back({ XMFLOAT3(px, waterY, pz), normal, tangent, XMFLOAT2(u * uvRepeatX, (1.0f - v) * uvRepeatY) });
+            }
+        }
+
+        ObjSubset subset;
+        subset.MaterialName = WaterMaterialName;
+        subset.IndexStart = (uint32_t)mesh.Indices.size();
+        for (int z = 0; z < grid; ++z)
+        {
+            for (int x = 0; x < grid; ++x)
+            {
+                const uint32_t i0 = baseVertex + (uint32_t)(z * (grid + 1) + x);
+                const uint32_t i1 = i0 + 1;
+                const uint32_t i2 = i0 + (uint32_t)(grid + 1);
+                const uint32_t i3 = i2 + 1;
+                mesh.Indices.push_back(i0);
+                mesh.Indices.push_back(i2);
+                mesh.Indices.push_back(i3);
+                mesh.Indices.push_back(i0);
+                mesh.Indices.push_back(i3);
+                mesh.Indices.push_back(i1);
+            }
+        }
+        subset.IndexCount = (uint32_t)mesh.Indices.size() - subset.IndexStart;
         mesh.Subsets.push_back(subset);
     }
 
@@ -467,6 +552,7 @@ void RenderingSystem::BuildModelGeometry()
     }
 
     AddDisplacementSphere(mMeshData, mDisplacementSphereParams);
+    AddTessellatedWaterPlane(mMeshData);
 
     mIndexCount = (UINT)mMeshData.Indices.size();
     const UINT vBufferSize = (UINT)(mMeshData.Vertices.size() * sizeof(VertexPosNormal));
@@ -603,7 +689,9 @@ void RenderingSystem::BuildTextureResources()
         dst.Specular = src.Specular;
         dst.Shininess = src.Shininess;
         dst.DisplacementScale = src.DisplacementScale;
+        dst.Alpha = src.Alpha;
         dst.IsDisplacementSphere = src.Name == DisplacementSphereMaterialName;
+        dst.IsWater = src.Name == WaterMaterialName;
 
         auto loadTextureIndex = [&](const std::wstring& path, UINT& index)
         {
@@ -698,7 +786,7 @@ void RenderingSystem::BuildGeometryRootSignature()
         texTables[i].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
     }
 
-    D3D12_ROOT_PARAMETER rootParams[4] = {};
+    D3D12_ROOT_PARAMETER rootParams[5] = {};
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -714,6 +802,9 @@ void RenderingSystem::BuildGeometryRootSignature()
     rootParams[3].DescriptorTable.NumDescriptorRanges = 1;
     rootParams[3].DescriptorTable.pDescriptorRanges = &texTables[2];
     rootParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParams[4].Descriptor.ShaderRegister = 1;
+    rootParams[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     CD3DX12_STATIC_SAMPLER_DESC sampler(0, D3D12_FILTER_ANISOTROPIC,
         D3D12_TEXTURE_ADDRESS_MODE_WRAP, D3D12_TEXTURE_ADDRESS_MODE_WRAP, D3D12_TEXTURE_ADDRESS_MODE_WRAP);
@@ -764,12 +855,16 @@ void RenderingSystem::BuildPipelineStates()
     ComPtr<ID3DBlob> gHs;
     ComPtr<ID3DBlob> gDs;
     ComPtr<ID3DBlob> gPs;
+    ComPtr<ID3DBlob> wDs;
+    ComPtr<ID3DBlob> wPs;
     ComPtr<ID3DBlob> lVs;
     ComPtr<ID3DBlob> lPs;
     CompileShader(L"Shaders/GBufferVS.hlsl", "VSMain", "vs_5_0", gVs);
     CompileShader(L"Shaders/GBufferHS.hlsl", "HSMain", "hs_5_0", gHs);
     CompileShader(L"Shaders/GBufferDS.hlsl", "DSMain", "ds_5_0", gDs);
     CompileShader(L"Shaders/GBufferPS.hlsl", "PSMain", "ps_5_0", gPs);
+    CompileShader(L"Shaders/WaterDS.hlsl", "DSMain", "ds_5_0", wDs);
+    CompileShader(L"Shaders/WaterPS.hlsl", "PSMain", "ps_5_0", wPs);
     CompileShader(L"Shaders/DeferredLightingVS.hlsl", "VSMain", "vs_5_0", lVs);
     CompileShader(L"Shaders/DeferredLightingPS.hlsl", "PSMain", "ps_5_0", lPs);
 
@@ -801,6 +896,24 @@ void RenderingSystem::BuildPipelineStates()
     geoDesc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
     geoDesc.SampleDesc.Count = 1;
     ThrowIfFailed(mDevice->CreateGraphicsPipelineState(&geoDesc, IID_PPV_ARGS(&mGeometryPSO)));
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC waterDesc = geoDesc;
+    waterDesc.DS = { wDs->GetBufferPointer(), wDs->GetBufferSize() };
+    waterDesc.PS = { wPs->GetBufferPointer(), wPs->GetBufferSize() };
+    waterDesc.NumRenderTargets = 1;
+    waterDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    for (UINT i = 1; i < _countof(waterDesc.RTVFormats); ++i)
+        waterDesc.RTVFormats[i] = DXGI_FORMAT_UNKNOWN;
+    waterDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    waterDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
+    waterDesc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    waterDesc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    waterDesc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+    waterDesc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+    waterDesc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
+    waterDesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    waterDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    ThrowIfFailed(mDevice->CreateGraphicsPipelineState(&waterDesc, IID_PPV_ARGS(&mWaterPSO)));
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC lightDesc = {};
     lightDesc.pRootSignature = mLightingRootSignature.Get();
@@ -959,8 +1072,9 @@ void RenderingSystem::UpdateCamera(const InputDevice& input, float dt)
     XMStoreFloat3(&mCameraPos, pos);
 }
 
-void RenderingSystem::Update(float, float deltaTime, const InputDevice& input)
+void RenderingSystem::Update(float totalTime, float deltaTime, const InputDevice& input)
 {
+    mTotalTime = totalTime;
     UpdateCamera(input, deltaTime);
     UpdateLightControls(input, deltaTime);
 
@@ -978,8 +1092,9 @@ void RenderingSystem::Update(float, float deltaTime, const InputDevice& input)
     XMStoreFloat4x4(&mGeometryConstants.World, XMMatrixTranspose(world));
     mGeometryConstants.TextureTransform = XMFLOAT4(1.0f, 1.0f, 0.0f, 0.0f);
     mGeometryConstants.EyeDisplacement = XMFLOAT4(mCameraPos.x, mCameraPos.y, mCameraPos.z, 1.0f);
-    mGeometryConstants.TessellationParams = XMFLOAT4(128.0f, 1.0f, 10.0f, 75.0f);
+    mGeometryConstants.TessellationParams = XMFLOAT4(64.0f, 1.0f, 10.0f, 75.0f);
     mGeometryConstants.DemoSphereParams = mDisplacementSphereParams;
+    mGeometryConstants.WaterParams = XMFLOAT4(mTotalTime, 0.018f, 0.42f, 0.0f);
     mLightingConstants.EyePosW = mCameraPos;
 }
 
@@ -1030,6 +1145,9 @@ void RenderingSystem::Draw(ID3D12GraphicsCommandList* cmdList,
     {
         const auto& subset = mRenderSubsets[i];
         const RenderMaterial& material = mRenderMaterials[subset.MaterialIndex];
+        if (material.IsWater)
+            continue;
+
         mGeometryConstants.DiffuseColor = material.Diffuse;
         mGeometryConstants.SpecularColor = material.Specular;
         mGeometryConstants.MaterialParams = XMFLOAT4(
@@ -1075,6 +1193,47 @@ void RenderingSystem::Draw(ID3D12GraphicsCommandList* cmdList,
     cmdList->IASetVertexBuffers(0, 0, nullptr);
     cmdList->IASetIndexBuffer(nullptr);
     cmdList->DrawInstanced(3, 1, 0, 0);
+
+    cmdList->SetPipelineState(mWaterPSO.Get());
+    cmdList->SetGraphicsRootSignature(mGeometryRootSignature.Get());
+    ID3D12DescriptorHeap* waterHeaps[] = { mTextureHeap.Get() };
+    cmdList->SetDescriptorHeaps(1, waterHeaps);
+    cmdList->OMSetRenderTargets(1, &backBufferView, TRUE, &depthStencilView);
+    cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+    cmdList->IASetVertexBuffers(0, 1, &mVBV);
+    cmdList->IASetIndexBuffer(&mIBV);
+
+    for (UINT i = 0; i < (UINT)mRenderSubsets.size(); ++i)
+    {
+        const auto& subset = mRenderSubsets[i];
+        const RenderMaterial& material = mRenderMaterials[subset.MaterialIndex];
+        if (!material.IsWater)
+            continue;
+
+        mGeometryConstants.DiffuseColor = material.Diffuse;
+        mGeometryConstants.SpecularColor = material.Specular;
+        mGeometryConstants.MaterialParams = XMFLOAT4(
+            material.Shininess,
+            1.6f,
+            material.DisplacementScale,
+            2.0f);
+        mGeometryConstants.WaterParams.z = material.Alpha;
+        UploadGeometryConstants(i);
+
+        CD3DX12_GPU_DESCRIPTOR_HANDLE textureHandle(mTextureHeap->GetGPUDescriptorHandleForHeapStart());
+        textureHandle.Offset(material.TextureIndex, mSrvDescriptorSize);
+        CD3DX12_GPU_DESCRIPTOR_HANDLE normalTextureHandle(mTextureHeap->GetGPUDescriptorHandleForHeapStart());
+        normalTextureHandle.Offset(material.NormalTextureIndex, mSrvDescriptorSize);
+        CD3DX12_GPU_DESCRIPTOR_HANDLE displacementTextureHandle(mTextureHeap->GetGPUDescriptorHandleForHeapStart());
+        displacementTextureHandle.Offset(material.DisplacementTextureIndex, mSrvDescriptorSize);
+        D3D12_GPU_VIRTUAL_ADDRESS cbAddress = mGeometryConstantBuffer->GetGPUVirtualAddress() + (UINT64)i * mGeometryConstantByteSize;
+        cmdList->SetGraphicsRootConstantBufferView(0, cbAddress);
+        cmdList->SetGraphicsRootDescriptorTable(1, textureHandle);
+        cmdList->SetGraphicsRootDescriptorTable(2, normalTextureHandle);
+        cmdList->SetGraphicsRootDescriptorTable(3, displacementTextureHandle);
+        cmdList->SetGraphicsRootConstantBufferView(4, mLightingConstantBuffer->GetGPUVirtualAddress());
+        cmdList->DrawIndexedInstanced(subset.IndexCount, 1, subset.IndexStart, 0, 0);
+    }
 
     auto toPresent = CD3DX12_RESOURCE_BARRIER::Transition(
         backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);

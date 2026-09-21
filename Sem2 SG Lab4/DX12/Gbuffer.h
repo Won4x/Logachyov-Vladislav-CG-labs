@@ -25,6 +25,8 @@ public:
     ID3D12DescriptorHeap* SrvHeap() const { return mSrvHeap.Get(); }
 
     DXGI_FORMAT Format(UINT index) const { return mFormats[index]; }
+    UINT Width() const { return mWidth; }
+    UINT Height() const { return mHeight; }
 
 private:
     void BuildResources();

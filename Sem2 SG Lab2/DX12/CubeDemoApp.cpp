@@ -4,7 +4,7 @@
 CubeApp::CubeApp(HINSTANCE hInstance)
     : D3DApp(hInstance)
 {
-    mMainWndCaption = L"CG lab2 | Deferred Rendering | 1 Dir 2 Point 3 Spot | C place light";
+    mMainWndCaption = L"CG lab2 | Deferred | LMB/Space shoot point lights | 1 Dir 2 Point 3 Spot | C place";
 }
 
 CubeApp::~CubeApp()

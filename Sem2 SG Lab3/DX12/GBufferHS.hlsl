@@ -9,6 +9,7 @@ cbuffer GeometryCB : register(b0)
     float4 gEyeDisplacement;
     float4 gTessellationParams;
     float4 gDemoSphereParams;
+    float4 gWaterParams;
 };
 
 struct HSInput
@@ -35,10 +36,9 @@ struct PatchConstants
     float InsideTess : SV_InsideTessFactor;
 };
 
-float ComputePatchTessellation(InputPatch<HSInput, 3> patch)
+float ComputeDistanceTessellation(float3 positionW)
 {
-    float3 center = (patch[0].PosW + patch[1].PosW + patch[2].PosW) / 3.0f;
-    float distanceToCamera = distance(center, gEyeDisplacement.xyz);
+    float distanceToCamera = distance(positionW, gEyeDisplacement.xyz);
     float maxTess = max(gTessellationParams.x, gTessellationParams.y);
     float minTess = min(gTessellationParams.x, gTessellationParams.y);
     float nearDistance = gTessellationParams.z;
@@ -47,14 +47,18 @@ float ComputePatchTessellation(InputPatch<HSInput, 3> patch)
     return lerp(maxTess, minTess, lod);
 }
 
+float ComputeEdgeTessellation(float3 aW, float3 bW)
+{
+    return ComputeDistanceTessellation((aW + bW) * 0.5f);
+}
+
 PatchConstants PatchConstantMain(InputPatch<HSInput, 3> patch, uint patchId : SV_PrimitiveID)
 {
     PatchConstants output;
-    float tess = ComputePatchTessellation(patch);
-    output.EdgeTess[0] = tess;
-    output.EdgeTess[1] = tess;
-    output.EdgeTess[2] = tess;
-    output.InsideTess = tess;
+    output.EdgeTess[0] = ComputeEdgeTessellation(patch[1].PosW, patch[2].PosW);
+    output.EdgeTess[1] = ComputeEdgeTessellation(patch[2].PosW, patch[0].PosW);
+    output.EdgeTess[2] = ComputeEdgeTessellation(patch[0].PosW, patch[1].PosW);
+    output.InsideTess = (output.EdgeTess[0] + output.EdgeTess[1] + output.EdgeTess[2]) / 3.0f;
     return output;
 }
 

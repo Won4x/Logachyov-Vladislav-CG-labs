@@ -93,6 +93,12 @@
     <None Include="GBufferPS.hlsl" />
     <None Include="DeferredLightingVS.hlsl" />
     <None Include="DeferredLightingPS.hlsl" />
+    <None Include="WaterDS.hlsl">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
+    <None Include="WaterPS.hlsl">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
     <None Include="Assets\DisplacementSphere\Sphere.obj">
       <Filter>Models</Filter>
     </None>
@@ -103,6 +109,15 @@
       <Filter>Файлы ресурсов</Filter>
     </None>
     <None Include="Assets\DisplacementSphere\BrickDisplacement.png">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
+    <None Include="Assets\Water\WaterDiffuse.png">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
+    <None Include="Assets\Water\WaterNormal.png">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
+    <None Include="Assets\Water\WaterDisplacement.png">
       <Filter>Файлы ресурсов</Filter>
     </None>
   </ItemGroup>

@@ -1,7 +1,9 @@
 #include "RenderingSystem.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cwctype>
+#include <limits>
 
 namespace
 {
@@ -200,6 +202,38 @@ namespace
                 MessageBoxA(nullptr, (char*)errors->GetBufferPointer(), "Shader compile error", MB_OK);
             ThrowIfFailed(hr);
         }
+    }
+
+    bool RayIntersectsTriangle(
+        XMVECTOR origin,
+        XMVECTOR direction,
+        XMVECTOR v0,
+        XMVECTOR v1,
+        XMVECTOR v2,
+        float& distance)
+    {
+        const float epsilon = 1e-5f;
+        XMVECTOR edge1 = v1 - v0;
+        XMVECTOR edge2 = v2 - v0;
+        XMVECTOR p = XMVector3Cross(direction, edge2);
+        float det = XMVectorGetX(XMVector3Dot(edge1, p));
+
+        if (fabsf(det) < epsilon)
+            return false;
+
+        float invDet = 1.0f / det;
+        XMVECTOR t = origin - v0;
+        float u = XMVectorGetX(XMVector3Dot(t, p)) * invDet;
+        if (u < 0.0f || u > 1.0f)
+            return false;
+
+        XMVECTOR q = XMVector3Cross(t, edge1);
+        float v = XMVectorGetX(XMVector3Dot(direction, q)) * invDet;
+        if (v < 0.0f || u + v > 1.0f)
+            return false;
+
+        distance = XMVectorGetX(XMVector3Dot(edge2, q)) * invDet;
+        return distance > epsilon;
     }
 }
 
@@ -569,35 +603,36 @@ void RenderingSystem::BuildPipelineStates()
 void RenderingSystem::BuildLights()
 {
     mLightingConstants.AmbientColor = XMFLOAT4(0.06f, 0.065f, 0.07f, 1.0f);
-    mLightingConstants.LightCount = 3.0f;
+    mLightingConstants.LightCount = (float)BaseLightCount;
 
     auto setDirectional = [&](UINT i, XMFLOAT3 direction, XMFLOAT3 color, float intensity)
         {
-            mLightingConstants.Lights[i].PositionRange = XMFLOAT4(0, 0, 0, 0);
-            mLightingConstants.Lights[i].DirectionSpot = XMFLOAT4(direction.x, direction.y, direction.z, 0.0f);
-            mLightingConstants.Lights[i].ColorIntensity = XMFLOAT4(color.x, color.y, color.z, intensity);
-            mLightingConstants.Lights[i].Params = XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
+            mBaseLights[i].PositionRange = XMFLOAT4(0, 0, 0, 0);
+            mBaseLights[i].DirectionSpot = XMFLOAT4(direction.x, direction.y, direction.z, 0.0f);
+            mBaseLights[i].ColorIntensity = XMFLOAT4(color.x, color.y, color.z, intensity);
+            mBaseLights[i].Params = XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
         };
 
     auto setPoint = [&](UINT i, XMFLOAT3 position, float range, XMFLOAT3 color, float intensity)
         {
-            mLightingConstants.Lights[i].PositionRange = XMFLOAT4(position.x, position.y, position.z, range);
-            mLightingConstants.Lights[i].DirectionSpot = XMFLOAT4(0, 0, 0, 0);
-            mLightingConstants.Lights[i].ColorIntensity = XMFLOAT4(color.x, color.y, color.z, intensity);
-            mLightingConstants.Lights[i].Params = XMFLOAT4(1.0f, 0.0f, 0.0f, 0.0f);
+            mBaseLights[i].PositionRange = XMFLOAT4(position.x, position.y, position.z, range);
+            mBaseLights[i].DirectionSpot = XMFLOAT4(0, 0, 0, 0);
+            mBaseLights[i].ColorIntensity = XMFLOAT4(color.x, color.y, color.z, intensity);
+            mBaseLights[i].Params = XMFLOAT4(1.0f, 0.0f, 0.0f, 0.0f);
         };
 
     auto setSpot = [&](UINT i, XMFLOAT3 position, float range, XMFLOAT3 direction, float spotPower, XMFLOAT3 color, float intensity)
         {
-            mLightingConstants.Lights[i].PositionRange = XMFLOAT4(position.x, position.y, position.z, range);
-            mLightingConstants.Lights[i].DirectionSpot = XMFLOAT4(direction.x, direction.y, direction.z, spotPower);
-            mLightingConstants.Lights[i].ColorIntensity = XMFLOAT4(color.x, color.y, color.z, intensity);
-            mLightingConstants.Lights[i].Params = XMFLOAT4(2.0f, 0.0f, 0.0f, 0.0f);
+            mBaseLights[i].PositionRange = XMFLOAT4(position.x, position.y, position.z, range);
+            mBaseLights[i].DirectionSpot = XMFLOAT4(direction.x, direction.y, direction.z, spotPower);
+            mBaseLights[i].ColorIntensity = XMFLOAT4(color.x, color.y, color.z, intensity);
+            mBaseLights[i].Params = XMFLOAT4(2.0f, 0.0f, 0.0f, 0.0f);
         };
 
     setDirectional(0, XMFLOAT3(0.35f, -1.0f, 0.25f), XMFLOAT3(1.0f, 0.96f, 0.86f), 0.55f);
     setPoint(1, XMFLOAT3(-65.0f, 25.0f, -35.0f), 130.0f, XMFLOAT3(1.0f, 0.96f, 0.86f), 12.0f);
     setSpot(2, XMFLOAT3(35.0f, 70.0f, -100.0f), 180.0f, XMFLOAT3(-0.2f, -0.75f, 0.6f), 8.0f, XMFLOAT3(1.0f, 0.96f, 0.86f), 16.0f);
+    RebuildLightingConstants();
 }
 
 void RenderingSystem::UpdateLightControls(const InputDevice& input, float dt)
@@ -608,7 +643,7 @@ void RenderingSystem::UpdateLightControls(const InputDevice& input, float dt)
             mSelectedLight = i;
     }
 
-    DeferredLight& light = mLightingConstants.Lights[mSelectedLight];
+    DeferredLight& light = mBaseLights[mSelectedLight];
     if (input.WasKeyPressed('C'))
     {
         if (mSelectedLight == 0)
@@ -666,6 +701,106 @@ void RenderingSystem::UpdateLightControls(const InputDevice& input, float dt)
     if (input.IsKeyDown('G')) light.ColorIntensity.w = (std::max)(0.0f, light.ColorIntensity.w - intensitySpeed);
 }
 
+void RenderingSystem::ShootPointLight()
+{
+    if (mShotPointLights.size() >= MaxShotPointLights)
+        mShotPointLights.erase(mShotPointLights.begin());
+
+    XMVECTOR origin = XMLoadFloat3(&mCameraPos);
+    XMVECTOR direction = XMVector3Normalize(XMLoadFloat3(&mCameraForward));
+
+    float hitDistance = 600.0f;
+    float sceneHit = 0.0f;
+    if (RaycastScene(origin + direction * 2.0f, direction, sceneHit))
+        hitDistance = (std::max)(4.0f, sceneHit + 2.0f);
+
+    ShotPointLight shot;
+    shot.Origin = mCameraPos;
+    shot.Position = mCameraPos;
+    XMStoreFloat3(&shot.Direction, direction);
+    shot.Travelled = 0.0f;
+    shot.HitDistance = hitDistance;
+    shot.Flying = true;
+    mShotPointLights.push_back(shot);
+}
+
+void RenderingSystem::UpdateShotPointLights(float dt)
+{
+    const float shotSpeed = 260.0f;
+    for (auto& shot : mShotPointLights)
+    {
+        if (!shot.Flying)
+            continue;
+
+        shot.Travelled += shotSpeed * dt;
+        if (shot.Travelled >= shot.HitDistance)
+        {
+            shot.Travelled = shot.HitDistance;
+            shot.Flying = false;
+        }
+
+        XMVECTOR origin = XMLoadFloat3(&shot.Origin);
+        XMVECTOR direction = XMLoadFloat3(&shot.Direction);
+        XMVECTOR position = origin + direction * shot.Travelled;
+        XMStoreFloat3(&shot.Position, position);
+    }
+}
+
+void RenderingSystem::RebuildLightingConstants()
+{
+    for (UINT i = 0; i < MaxDeferredLights; ++i)
+        mLightingConstants.Lights[i] = {};
+
+    for (UINT i = 0; i < BaseLightCount; ++i)
+        mLightingConstants.Lights[i] = mBaseLights[i];
+
+    UINT lightIndex = BaseLightCount;
+    for (const auto& shot : mShotPointLights)
+    {
+        if (lightIndex >= MaxDeferredLights)
+            break;
+
+        DeferredLight light = {};
+        light.PositionRange = XMFLOAT4(shot.Position.x, shot.Position.y, shot.Position.z, 75.0f);
+        light.DirectionSpot = XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
+        light.ColorIntensity = XMFLOAT4(1.0f, 0.96f, 0.84f, 8.0f);
+        light.Params = XMFLOAT4(1.0f, 0.0f, 0.0f, 0.0f);
+        mLightingConstants.Lights[lightIndex++] = light;
+    }
+
+    mLightingConstants.LightCount = (float)lightIndex;
+}
+
+bool RenderingSystem::RaycastScene(XMVECTOR rayOrigin, XMVECTOR rayDirection, float& hitDistance) const
+{
+    hitDistance = (std::numeric_limits<float>::max)();
+    bool hit = false;
+
+    const XMVECTOR center = XMLoadFloat3(&mModelCenter);
+    const XMVECTOR scale = XMVectorReplicate(mModelScale);
+
+    for (size_t i = 0; i + 2 < mMeshData.Indices.size(); i += 3)
+    {
+        const auto& a = mMeshData.Vertices[mMeshData.Indices[i + 0]].Pos;
+        const auto& b = mMeshData.Vertices[mMeshData.Indices[i + 1]].Pos;
+        const auto& c = mMeshData.Vertices[mMeshData.Indices[i + 2]].Pos;
+
+        XMVECTOR v0 = (XMLoadFloat3(&a) - center) * scale;
+        XMVECTOR v1 = (XMLoadFloat3(&b) - center) * scale;
+        XMVECTOR v2 = (XMLoadFloat3(&c) - center) * scale;
+
+        float distance = 0.0f;
+        if (RayIntersectsTriangle(rayOrigin, rayDirection, v0, v1, v2, distance)
+            && distance < hitDistance)
+        {
+            hitDistance = distance;
+            hit = true;
+        }
+    }
+
+    return hit;
+}
+
 void RenderingSystem::UpdateCamera(const InputDevice& input, float dt)
 {
     float moveSpeed = 90.0f;
@@ -708,6 +843,10 @@ void RenderingSystem::Update(float, float deltaTime, const InputDevice& input)
 {
     UpdateCamera(input, deltaTime);
     UpdateLightControls(input, deltaTime);
+    if (input.WasMousePressed(0) || input.WasKeyPressed(VK_SPACE))
+        ShootPointLight();
+    UpdateShotPointLights(deltaTime);
+    RebuildLightingConstants();
 
     XMMATRIX world =
         XMMatrixTranslation(-mModelCenter.x, -mModelCenter.y, -mModelCenter.z) *

@@ -26,12 +26,16 @@ struct DeferredLight
     XMFLOAT4 Params;
 };
 
+static const UINT MaxDeferredLights = 128;
+static const UINT BaseLightCount = 3;
+static const UINT MaxShotPointLights = 100;
+
 struct LightingConstants
 {
     XMFLOAT3 EyePosW;
     float LightCount;
     XMFLOAT4 AmbientColor;
-    DeferredLight Lights[16];
+    DeferredLight Lights[MaxDeferredLights];
 };
 
 class RenderingSystem
@@ -66,6 +70,16 @@ private:
         UINT MaterialIndex = 0;
     };
 
+    struct ShotPointLight
+    {
+        XMFLOAT3 Origin = XMFLOAT3(0.0f, 0.0f, 0.0f);
+        XMFLOAT3 Position = XMFLOAT3(0.0f, 0.0f, 0.0f);
+        XMFLOAT3 Direction = XMFLOAT3(0.0f, 0.0f, 1.0f);
+        float Travelled = 0.0f;
+        float HitDistance = 0.0f;
+        bool Flying = true;
+    };
+
     void BuildModelGeometry();
     void FitModelToView();
     void BuildTextureResources();
@@ -79,6 +93,10 @@ private:
     void UploadLightingConstants();
     void UpdateCamera(const InputDevice& input, float dt);
     void UpdateLightControls(const InputDevice& input, float dt);
+    void ShootPointLight();
+    void UpdateShotPointLights(float dt);
+    void RebuildLightingConstants();
+    bool RaycastScene(XMVECTOR rayOrigin, XMVECTOR rayDirection, float& hitDistance) const;
 
 private:
     ID3D12Device* mDevice = nullptr;
@@ -115,6 +133,8 @@ private:
 
     GeometryConstants mGeometryConstants = {};
     LightingConstants mLightingConstants = {};
+    DeferredLight mBaseLights[BaseLightCount] = {};
+    std::vector<ShotPointLight> mShotPointLights;
     XMFLOAT4X4 mProj;
     XMFLOAT3 mCameraPos = { 0.0f, 55.0f, -185.0f };
     XMFLOAT3 mCameraForward = { 0.0f, 0.0f, 1.0f };

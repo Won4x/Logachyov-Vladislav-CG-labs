@@ -84,6 +84,7 @@ private:
     void CreateFallbackTexture();
     void BuildConstantBuffers();
     void BuildShadowResources();
+    void BuildCascadeOverlayTextures();
     void BuildGeometryRootSignature();
     void BuildShadowRootSignature();
     void BuildLightingRootSignature();
@@ -144,6 +145,8 @@ private:
     ComPtr<ID3D12Resource> mShadowMap;
     ComPtr<ID3D12DescriptorHeap> mShadowDsvHeap;
     ComPtr<ID3D12DescriptorHeap> mLightingSrvHeap;
+    std::vector<ComPtr<ID3D12Resource>> mCascadeOverlayTextures;
+    std::vector<ComPtr<ID3D12Resource>> mCascadeOverlayUploads;
 
     std::vector<ComPtr<ID3D12Resource>> mTextures;
     std::vector<ComPtr<ID3D12Resource>> mTextureUploads;

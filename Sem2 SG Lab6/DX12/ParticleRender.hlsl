@@ -53,7 +53,7 @@ VSOutput VSMain(uint vertexId : SV_VertexID)
     output.PosW = p.Position;
     output.Color = p.Color * gColor;
     output.Size = p.Size * gCameraRightSize.w;
-    output.Alive = p.Age > 0.0f ? 1.0f : 0.0f;
+    output.Alive = p.Age != 0.0f ? 1.0f : 0.0f;
     return output;
 }
 

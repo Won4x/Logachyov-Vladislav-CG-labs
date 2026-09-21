@@ -1,10 +1,15 @@
 #include "RenderingSystem.h"
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <cstdio>
 #include <cwctype>
+#include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <assimp/Importer.hpp>
+#include <assimp/postprocess.h>
+#include <assimp/scene.h>
 
 namespace
 {
@@ -46,10 +51,37 @@ namespace
             && lower.compare(lower.size() - extension.size(), extension.size(), extension) == 0;
     }
 
+    DXGI_FORMAT WicToDxgiFormat(WICPixelFormatGUID format)
+    {
+        if (format == GUID_WICPixelFormat32bppRGBA) return DXGI_FORMAT_R8G8B8A8_UNORM;
+        if (format == GUID_WICPixelFormat32bppBGRA) return DXGI_FORMAT_B8G8R8A8_UNORM;
+        return DXGI_FORMAT_R8G8B8A8_UNORM;
+    }
+
+    std::wstring GetDirectoryName(const std::wstring& path)
+    {
+        const size_t slash = path.find_last_of(L"/\\");
+        return slash == std::wstring::npos ? L"" : path.substr(0, slash);
+    }
+
+    std::wstring CombinePath(const std::wstring& a, const std::wstring& b)
+    {
+        if (a.empty())
+            return b;
+        const wchar_t last = a.back();
+        if (last == L'\\' || last == L'/')
+            return a + b;
+        return a + L"\\" + b;
+    }
+
     std::wstring FindExistingModelPath()
     {
         const std::wstring candidates[] =
         {
+            L"Models/GordonFreeman/Gordon.fbx",
+            L"../x64/Debug/Models/GordonFreeman/Gordon.fbx",
+            L"x64/Debug/Models/GordonFreeman/Gordon.fbx",
+            L"../../x64/Debug/Models/GordonFreeman/Gordon.fbx",
             L"Models/sponza.obj",
             L"../x64/Debug/Models/sponza.obj",
             L"x64/Debug/Models/sponza.obj",
@@ -63,6 +95,556 @@ namespace
         }
 
         return L"";
+    }
+
+    std::string WideToUtf8(const std::wstring& text)
+    {
+        if (text.empty())
+            return {};
+
+        const int size = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0, nullptr, nullptr);
+        std::string result(size, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), &result[0], size, nullptr, nullptr);
+        return result;
+    }
+
+    std::wstring Utf8ToWide(const std::string& text)
+    {
+        if (text.empty())
+            return {};
+
+        const int size = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0);
+        std::wstring result(size, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), &result[0], size);
+        return result;
+    }
+
+    std::wstring GetFileName(const std::wstring& path)
+    {
+        const size_t slash = path.find_last_of(L"/\\");
+        return slash == std::wstring::npos ? path : path.substr(slash + 1);
+    }
+
+    XMFLOAT3 TransformAssimpPoint(const aiMatrix4x4& m, const aiVector3D& v)
+    {
+        return XMFLOAT3(
+            m.a1 * v.x + m.a2 * v.y + m.a3 * v.z + m.a4,
+            m.b1 * v.x + m.b2 * v.y + m.b3 * v.z + m.b4,
+            m.c1 * v.x + m.c2 * v.y + m.c3 * v.z + m.c4);
+    }
+
+    XMFLOAT3 TransformAssimpVector(const aiMatrix4x4& m, const aiVector3D& v)
+    {
+        XMVECTOR n = XMVector3Normalize(XMVectorSet(
+            m.a1 * v.x + m.a2 * v.y + m.a3 * v.z,
+            m.b1 * v.x + m.b2 * v.y + m.b3 * v.z,
+            m.c1 * v.x + m.c2 * v.y + m.c3 * v.z,
+            0.0f));
+
+        XMFLOAT3 result;
+        XMStoreFloat3(&result, n);
+        return result;
+    }
+
+    std::wstring ResolveAssimpTexturePath(const std::wstring& modelDirectory, const aiString& texturePath)
+    {
+        if (texturePath.length == 0)
+            return L"";
+
+        std::wstring path = Utf8ToWide(texturePath.C_Str());
+        if (path.empty() || path[0] == L'*')
+            return L"";
+
+        std::replace(path.begin(), path.end(), L'/', L'\\');
+        if (FileExists(path))
+            return path;
+
+        const std::wstring combined = CombinePath(modelDirectory, path);
+        if (FileExists(combined))
+            return combined;
+
+        const std::wstring byName = CombinePath(modelDirectory, GetFileName(path));
+        if (FileExists(byName))
+            return byName;
+
+        const std::wstring lowerName = ToLower(GetFileName(path));
+        if (lowerName == L"eye_1.png")
+        {
+            const std::wstring local = CombinePath(modelDirectory, L"eye.png");
+            if (FileExists(local))
+                return local;
+        }
+
+        if (lowerName == L"mouth_1.png")
+        {
+            const std::wstring local = CombinePath(modelDirectory, L"mouth.png");
+            if (FileExists(local))
+                return local;
+        }
+
+        return L"";
+    }
+
+    bool TryMaterialTexture(const std::wstring& modelDirectory, aiMaterial* material, aiTextureType type, std::wstring& outPath)
+    {
+        aiString texturePath;
+        if (material && material->GetTextureCount(type) > 0 && material->GetTexture(type, 0, &texturePath) == AI_SUCCESS)
+        {
+            outPath = ResolveAssimpTexturePath(modelDirectory, texturePath);
+            return !outPath.empty();
+        }
+
+        return false;
+    }
+
+    bool LoadFbxWithAssimp(const std::wstring& filename, ObjMeshData& out)
+    {
+        Assimp::Importer importer;
+        const unsigned int flags =
+            aiProcess_Triangulate |
+            aiProcess_JoinIdenticalVertices |
+            aiProcess_GenSmoothNormals |
+            aiProcess_CalcTangentSpace |
+            aiProcess_ImproveCacheLocality |
+            aiProcess_MakeLeftHanded |
+            aiProcess_FlipUVs;
+
+        const aiScene* scene = importer.ReadFile(WideToUtf8(filename), flags);
+        if (!scene || !scene->mRootNode || !scene->HasMeshes())
+            return false;
+
+        out = ObjMeshData{};
+        const std::wstring directory = GetDirectoryName(filename);
+
+        out.Materials.reserve(scene->mNumMaterials);
+        for (UINT i = 0; i < scene->mNumMaterials; ++i)
+        {
+            aiMaterial* src = scene->mMaterials[i];
+            ObjMaterialData dst;
+
+            aiString materialName;
+            if (src && src->Get(AI_MATKEY_NAME, materialName) == AI_SUCCESS)
+                dst.Name = materialName.C_Str();
+            if (dst.Name.empty())
+                dst.Name = "Material" + std::to_string(i);
+
+            aiColor4D diffuse;
+            if (src && aiGetMaterialColor(src, AI_MATKEY_COLOR_DIFFUSE, &diffuse) == AI_SUCCESS)
+                dst.Diffuse = XMFLOAT4(diffuse.r, diffuse.g, diffuse.b, diffuse.a);
+
+            aiColor4D specular;
+            if (src && aiGetMaterialColor(src, AI_MATKEY_COLOR_SPECULAR, &specular) == AI_SUCCESS)
+                dst.Specular = XMFLOAT4(specular.r, specular.g, specular.b, specular.a);
+
+            float shininess = 0.0f;
+            if (src && src->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
+                dst.Shininess = (std::max)(4.0f, shininess);
+
+            TryMaterialTexture(directory, src, aiTextureType_DIFFUSE, dst.DiffuseTexture);
+            TryMaterialTexture(directory, src, aiTextureType_NORMALS, dst.NormalTexture);
+            if (dst.NormalTexture.empty())
+                TryMaterialTexture(directory, src, aiTextureType_HEIGHT, dst.NormalTexture);
+            TryMaterialTexture(directory, src, aiTextureType_DISPLACEMENT, dst.DisplacementTexture);
+
+            out.Materials.push_back(dst);
+        }
+
+        if (out.Materials.empty())
+        {
+            ObjMaterialData material;
+            material.Name = "Default";
+            out.Materials.push_back(material);
+        }
+
+        auto appendNode = [&](auto&& self, const aiNode* node, const aiMatrix4x4& parentTransform) -> void
+        {
+            const aiMatrix4x4 world = parentTransform * node->mTransformation;
+
+            for (UINT meshSlot = 0; meshSlot < node->mNumMeshes; ++meshSlot)
+            {
+                const UINT meshIndex = node->mMeshes[meshSlot];
+                if (meshIndex >= scene->mNumMeshes)
+                    continue;
+
+                const aiMesh* mesh = scene->mMeshes[meshIndex];
+                if (!mesh || !mesh->HasPositions() || !mesh->HasFaces())
+                    continue;
+
+                ObjSubset subset;
+                const UINT materialIndex = mesh->mMaterialIndex < out.Materials.size() ? mesh->mMaterialIndex : 0u;
+                subset.MaterialName = out.Materials[materialIndex].Name;
+                subset.IndexStart = (uint32_t)out.Indices.size();
+
+                const uint32_t baseVertex = (uint32_t)out.Vertices.size();
+                out.Vertices.reserve(out.Vertices.size() + mesh->mNumVertices);
+                for (UINT vertexIndex = 0; vertexIndex < mesh->mNumVertices; ++vertexIndex)
+                {
+                    VertexPosNormal vertex = {};
+                    vertex.Pos = TransformAssimpPoint(world, mesh->mVertices[vertexIndex]);
+
+                    if (mesh->HasNormals())
+                        vertex.Normal = TransformAssimpVector(world, mesh->mNormals[vertexIndex]);
+                    else
+                        vertex.Normal = XMFLOAT3(0.0f, 1.0f, 0.0f);
+
+                    if (mesh->HasTangentsAndBitangents())
+                        vertex.Tangent = TransformAssimpVector(world, mesh->mTangents[vertexIndex]);
+                    else
+                        vertex.Tangent = XMFLOAT3(1.0f, 0.0f, 0.0f);
+
+                    if (mesh->HasTextureCoords(0))
+                    {
+                        const aiVector3D& uv = mesh->mTextureCoords[0][vertexIndex];
+                        vertex.TexC = XMFLOAT2(uv.x, uv.y);
+                    }
+                    else
+                    {
+                        vertex.TexC = XMFLOAT2(0.0f, 0.0f);
+                    }
+
+                    out.Vertices.push_back(vertex);
+                }
+
+                for (UINT faceIndex = 0; faceIndex < mesh->mNumFaces; ++faceIndex)
+                {
+                    const aiFace& face = mesh->mFaces[faceIndex];
+                    if (face.mNumIndices != 3)
+                        continue;
+
+                    out.Indices.push_back(baseVertex + face.mIndices[0]);
+                    out.Indices.push_back(baseVertex + face.mIndices[1]);
+                    out.Indices.push_back(baseVertex + face.mIndices[2]);
+                }
+
+                subset.IndexCount = (uint32_t)out.Indices.size() - subset.IndexStart;
+                if (subset.IndexCount > 0)
+                    out.Subsets.push_back(subset);
+            }
+
+            for (UINT childIndex = 0; childIndex < node->mNumChildren; ++childIndex)
+                self(self, node->mChildren[childIndex], world);
+        };
+
+        appendNode(appendNode, scene->mRootNode, aiMatrix4x4());
+        return !out.Vertices.empty() && !out.Indices.empty();
+    }
+
+    std::string ReadTextFile(const std::wstring& path)
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+            return {};
+        return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    }
+
+    std::string GetAttribute(const std::string& tag, const char* name)
+    {
+        const std::string key = std::string(name) + "=\"";
+        const size_t start = tag.find(key);
+        if (start == std::string::npos)
+            return {};
+        const size_t valueStart = start + key.size();
+        const size_t valueEnd = tag.find('"', valueStart);
+        return valueEnd == std::string::npos ? std::string() : tag.substr(valueStart, valueEnd - valueStart);
+    }
+
+    std::string StripHash(std::string value)
+    {
+        if (!value.empty() && value[0] == '#')
+            value.erase(value.begin());
+        return value;
+    }
+
+    std::vector<float> ParseFloatList(const std::string& text)
+    {
+        std::vector<float> values;
+        std::istringstream stream(text);
+        float value = 0.0f;
+        while (stream >> value)
+            values.push_back(value);
+        return values;
+    }
+
+    std::vector<int> ParseIntList(const std::string& text)
+    {
+        std::vector<int> values;
+        std::istringstream stream(text);
+        int value = 0;
+        while (stream >> value)
+            values.push_back(value);
+        return values;
+    }
+
+    bool GetTagText(const std::string& block, const char* tagName, std::string& out)
+    {
+        const std::string openNeedle = std::string("<") + tagName;
+        const std::string closeNeedle = std::string("</") + tagName + ">";
+        const size_t open = block.find(openNeedle);
+        if (open == std::string::npos)
+            return false;
+        const size_t openEnd = block.find('>', open);
+        if (openEnd == std::string::npos)
+            return false;
+        const size_t close = block.find(closeNeedle, openEnd + 1);
+        if (close == std::string::npos)
+            return false;
+        out = block.substr(openEnd + 1, close - openEnd - 1);
+        return true;
+    }
+
+    struct DaeFloatSource
+    {
+        std::vector<float> Values;
+        UINT Stride = 1;
+    };
+
+    void AddDaeMaterial(ObjMeshData& out, const std::string& symbol, const std::wstring& texture)
+    {
+        ObjMaterialData material;
+        material.Name = symbol;
+        material.DiffuseTexture = texture;
+        material.Diffuse = XMFLOAT4(0.95f, 0.95f, 0.95f, 1.0f);
+        material.Specular = XMFLOAT4(0.18f, 0.18f, 0.18f, 1.0f);
+        material.Shininess = 32.0f;
+        out.Materials.push_back(material);
+    }
+
+    bool LoadDaePosNormalTex(const std::wstring& filename, ObjMeshData& out)
+    {
+        const std::string xml = ReadTextFile(filename);
+        if (xml.empty())
+            return false;
+
+        const size_t meshOpen = xml.find("<mesh>");
+        const size_t meshClose = xml.find("</mesh>", meshOpen);
+        if (meshOpen == std::string::npos || meshClose == std::string::npos)
+            return false;
+
+        const std::string mesh = xml.substr(meshOpen, meshClose - meshOpen);
+        std::unordered_map<std::string, DaeFloatSource> sources;
+        size_t sourcePos = 0;
+        while ((sourcePos = mesh.find("<source", sourcePos)) != std::string::npos)
+        {
+            const size_t tagEnd = mesh.find('>', sourcePos);
+            const size_t sourceEnd = mesh.find("</source>", tagEnd);
+            if (tagEnd == std::string::npos || sourceEnd == std::string::npos)
+                break;
+
+            const std::string tag = mesh.substr(sourcePos, tagEnd - sourcePos + 1);
+            const std::string block = mesh.substr(sourcePos, sourceEnd - sourcePos);
+            const std::string id = GetAttribute(tag, "id");
+            std::string floatText;
+            if (!id.empty() && GetTagText(block, "float_array", floatText))
+            {
+                DaeFloatSource source;
+                source.Values = ParseFloatList(floatText);
+
+                const size_t accessor = block.find("<accessor");
+                if (accessor != std::string::npos)
+                {
+                    const size_t accessorEnd = block.find('>', accessor);
+                    const std::string accessorTag = block.substr(accessor, accessorEnd - accessor + 1);
+                    const std::string stride = GetAttribute(accessorTag, "stride");
+                    if (!stride.empty())
+                        source.Stride = (std::max)(1u, (UINT)std::strtoul(stride.c_str(), nullptr, 10));
+                }
+
+                sources[id] = source;
+            }
+
+            sourcePos = sourceEnd + 9;
+        }
+
+        std::unordered_map<std::string, std::string> verticesToPositionSource;
+        size_t verticesPos = 0;
+        while ((verticesPos = mesh.find("<vertices", verticesPos)) != std::string::npos)
+        {
+            const size_t tagEnd = mesh.find('>', verticesPos);
+            const size_t verticesEnd = mesh.find("</vertices>", tagEnd);
+            if (tagEnd == std::string::npos || verticesEnd == std::string::npos)
+                break;
+
+            const std::string tag = mesh.substr(verticesPos, tagEnd - verticesPos + 1);
+            const std::string block = mesh.substr(verticesPos, verticesEnd - verticesPos);
+            const std::string id = GetAttribute(tag, "id");
+            const size_t input = block.find("semantic=\"POSITION\"");
+            if (!id.empty() && input != std::string::npos)
+            {
+                const size_t inputStart = block.rfind("<input", input);
+                const size_t inputEnd = block.find("/>", input);
+                const std::string inputTag = block.substr(inputStart, inputEnd - inputStart + 2);
+                verticesToPositionSource[id] = StripHash(GetAttribute(inputTag, "source"));
+            }
+
+            verticesPos = verticesEnd + 11;
+        }
+
+        const std::wstring directory = GetDirectoryName(filename);
+        AddDaeMaterial(out, "Material1", CombinePath(directory, L"eye.png"));
+        AddDaeMaterial(out, "Material2", CombinePath(directory, L"gordon_cylmap2.png"));
+        AddDaeMaterial(out, "Material3", CombinePath(directory, L"gordon_sheet.png"));
+        AddDaeMaterial(out, "Material4", CombinePath(directory, L"rense.png"));
+        AddDaeMaterial(out, "Material5", CombinePath(directory, L"eye.png"));
+        AddDaeMaterial(out, "Material6", CombinePath(directory, L"mouth.png"));
+
+        size_t polyPos = 0;
+        while ((polyPos = mesh.find("<polylist", polyPos)) != std::string::npos)
+        {
+            const size_t tagEnd = mesh.find('>', polyPos);
+            const size_t polyEnd = mesh.find("</polylist>", tagEnd);
+            if (tagEnd == std::string::npos || polyEnd == std::string::npos)
+                break;
+
+            const std::string tag = mesh.substr(polyPos, tagEnd - polyPos + 1);
+            const std::string block = mesh.substr(polyPos, polyEnd - polyPos);
+            const std::string materialName = GetAttribute(tag, "material");
+            UINT positionOffset = 0;
+            UINT normalOffset = UINT_MAX;
+            UINT texOffset = UINT_MAX;
+            UINT inputStride = 0;
+            std::string positionSource;
+            std::string normalSource;
+            std::string texSource;
+
+            size_t inputPos = 0;
+            while ((inputPos = block.find("<input", inputPos)) != std::string::npos)
+            {
+                const size_t inputEnd = block.find("/>", inputPos);
+                if (inputEnd == std::string::npos)
+                    break;
+
+                const std::string inputTag = block.substr(inputPos, inputEnd - inputPos + 2);
+                const std::string semantic = GetAttribute(inputTag, "semantic");
+                const std::string source = StripHash(GetAttribute(inputTag, "source"));
+                const std::string offsetText = GetAttribute(inputTag, "offset");
+                const UINT offset = offsetText.empty() ? 0u : (UINT)std::strtoul(offsetText.c_str(), nullptr, 10);
+                inputStride = (std::max)(inputStride, offset + 1);
+
+                if (semantic == "VERTEX")
+                {
+                    positionOffset = offset;
+                    auto found = verticesToPositionSource.find(source);
+                    positionSource = found != verticesToPositionSource.end() ? found->second : source;
+                }
+                else if (semantic == "NORMAL")
+                {
+                    normalOffset = offset;
+                    normalSource = source;
+                }
+                else if (semantic == "TEXCOORD")
+                {
+                    texOffset = offset;
+                    texSource = source;
+                }
+
+                inputPos = inputEnd + 2;
+            }
+
+            std::string vcountText;
+            std::string pText;
+            if (inputStride == 0 || !GetTagText(block, "vcount", vcountText) || !GetTagText(block, "p", pText))
+            {
+                polyPos = polyEnd + 11;
+                continue;
+            }
+
+            const std::vector<int> vcounts = ParseIntList(vcountText);
+            const std::vector<int> packed = ParseIntList(pText);
+            auto positionSourceIt = sources.find(positionSource);
+            if (positionSourceIt == sources.end() || positionSourceIt->second.Values.empty())
+            {
+                polyPos = polyEnd + 11;
+                continue;
+            }
+
+            const DaeFloatSource& positions = positionSourceIt->second;
+            const DaeFloatSource* normals = nullptr;
+            const DaeFloatSource* texcoords = nullptr;
+
+            auto normalSourceIt = sources.find(normalSource);
+            if (!normalSource.empty() && normalSourceIt != sources.end() && !normalSourceIt->second.Values.empty())
+                normals = &normalSourceIt->second;
+
+            auto texSourceIt = sources.find(texSource);
+            if (!texSource.empty() && texSourceIt != sources.end() && !texSourceIt->second.Values.empty())
+                texcoords = &texSourceIt->second;
+
+            ObjSubset subset;
+            subset.MaterialName = materialName;
+            subset.IndexStart = (uint32_t)out.Indices.size();
+
+            size_t cursor = 0;
+            for (int count : vcounts)
+            {
+                const size_t polygonStart = cursor;
+                for (int tri = 1; tri + 1 < count; ++tri)
+                {
+                    const int corners[3] = { 0, tri, tri + 1 };
+                    for (int corner : corners)
+                    {
+                        const size_t indexBase = (polygonStart + (size_t)corner) * inputStride;
+                        if (indexBase + positionOffset >= packed.size())
+                            continue;
+
+                        const UINT posIndex = (UINT)packed[indexBase + positionOffset];
+                        if ((size_t)posIndex * positions.Stride + 2 >= positions.Values.size())
+                            continue;
+
+                        UINT normalIndex = 0u;
+                        if (normals && normalOffset != UINT_MAX && indexBase + normalOffset < packed.size())
+                            normalIndex = (UINT)packed[indexBase + normalOffset];
+
+                        UINT texIndex = 0u;
+                        if (texcoords && texOffset != UINT_MAX && indexBase + texOffset < packed.size())
+                            texIndex = (UINT)packed[indexBase + texOffset];
+
+                        VertexPosNormal vertex = {};
+                        const size_t pIndex = (size_t)posIndex * positions.Stride;
+                        vertex.Pos = XMFLOAT3(
+                            positions.Values[pIndex],
+                            positions.Values[pIndex + 1],
+                            -positions.Values[pIndex + 2]);
+
+                        if (normals)
+                        {
+                            const size_t nIndex = (size_t)normalIndex * normals->Stride;
+                            if (nIndex + 2 < normals->Values.size())
+                            {
+                                vertex.Normal = XMFLOAT3(
+                                    normals->Values[nIndex],
+                                    normals->Values[nIndex + 1],
+                                    -normals->Values[nIndex + 2]);
+                            }
+                        }
+                        else
+                        {
+                            vertex.Normal = XMFLOAT3(0.0f, 1.0f, 0.0f);
+                        }
+
+                        if (texcoords)
+                        {
+                            const size_t tIndex = (size_t)texIndex * texcoords->Stride;
+                            if (tIndex + 1 < texcoords->Values.size())
+                                vertex.TexC = XMFLOAT2(texcoords->Values[tIndex], 1.0f - texcoords->Values[tIndex + 1]);
+                        }
+
+                        vertex.Tangent = XMFLOAT3(1.0f, 0.0f, 0.0f);
+                        out.Vertices.push_back(vertex);
+                        out.Indices.push_back((uint32_t)out.Vertices.size() - 1u);
+                    }
+                }
+
+                cursor += count;
+            }
+
+            subset.IndexCount = (uint32_t)out.Indices.size() - subset.IndexStart;
+            if (subset.IndexCount > 0)
+                out.Subsets.push_back(subset);
+
+            polyPos = polyEnd + 11;
+        }
+
+        return !out.Vertices.empty() && !out.Indices.empty();
     }
 
     UINT FindMaterialIndex(const ObjMeshData& mesh, const std::string& name)
@@ -179,7 +761,46 @@ namespace
         }
         else
         {
-            return false;
+            HRESULT initHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            if (FAILED(initHr) && initHr != RPC_E_CHANGED_MODE)
+                return false;
+
+            ComPtr<IWICImagingFactory> factory;
+            HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory2, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+            if (FAILED(hr))
+                return false;
+
+            ComPtr<IWICBitmapDecoder> decoder;
+            hr = factory->CreateDecoderFromFilename(filename.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder);
+            if (FAILED(hr))
+                return false;
+
+            ComPtr<IWICBitmapFrameDecode> frame;
+            if (FAILED(decoder->GetFrame(0, &frame)))
+                return false;
+
+            frame->GetSize(&width, &height);
+
+            WICPixelFormatGUID srcFormat;
+            frame->GetPixelFormat(&srcFormat);
+
+            ComPtr<IWICBitmapSource> bitmapSource = frame;
+            if (srcFormat != GUID_WICPixelFormat32bppRGBA)
+            {
+                ComPtr<IWICFormatConverter> converter;
+                if (FAILED(factory->CreateFormatConverter(&converter)))
+                    return false;
+
+                if (FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA,
+                    WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom)))
+                    return false;
+
+                bitmapSource = converter;
+            }
+
+            pixels.resize((size_t)width * height * 4);
+            if (FAILED(bitmapSource->CopyPixels(nullptr, width * 4, (UINT)pixels.size(), pixels.data())))
+                return false;
         }
 
         CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
@@ -285,7 +906,14 @@ void RenderingSystem::BuildModelGeometry()
 {
     const std::wstring modelPath = FindExistingModelPath();
     if (!modelPath.empty())
-        ObjLoader::LoadObjPosNormal(modelPath, mMeshData, true);
+    {
+        if (HasExtension(modelPath, L".fbx"))
+            LoadFbxWithAssimp(modelPath, mMeshData);
+        else if (HasExtension(modelPath, L".dae"))
+            LoadDaePosNormalTex(modelPath, mMeshData);
+        else
+            ObjLoader::LoadObjPosNormal(modelPath, mMeshData, true);
+    }
 
     if (mMeshData.Vertices.empty() || mMeshData.Indices.empty())
     {
@@ -651,12 +1279,17 @@ void RenderingSystem::BuildTextureResources()
         loadTextureIndex(src.DisplacementTexture, dst.DisplacementTextureIndex);
     }
 
+    if (mRenderMaterials.empty())
+        mRenderMaterials.push_back(RenderMaterial{});
+
     for (const auto& subset : mMeshData.Subsets)
     {
         RenderSubset renderSubset;
         renderSubset.IndexStart = subset.IndexStart;
         renderSubset.IndexCount = subset.IndexCount;
         renderSubset.MaterialIndex = FindMaterialIndex(mMeshData, subset.MaterialName);
+        if (renderSubset.MaterialIndex >= (UINT)mRenderMaterials.size())
+            renderSubset.MaterialIndex = 0;
         mRenderSubsets.push_back(renderSubset);
     }
 
@@ -779,14 +1412,26 @@ void RenderingSystem::BuildShadowResources()
 void RenderingSystem::BuildParticleResources()
 {
     std::vector<GpuParticle> initialParticles(ParticleCount);
+    XMMATRIX particleWorld = XMMatrixIdentity();
+    if (!mSceneObjects.empty())
+        particleWorld = XMLoadFloat4x4(&mSceneObjects[0].World);
+
     for (UINT i = 0; i < ParticleCount; ++i)
     {
-        initialParticles[i].Position = XMFLOAT3(0.0f, 0.0f, 0.0f);
-        initialParticles[i].Age = 0.0f;
+        XMFLOAT3 particlePos(0.0f, 0.0f, 0.0f);
+        if (!mMeshData.Vertices.empty())
+        {
+            const VertexPosNormal& vertex = mMeshData.Vertices[i % mMeshData.Vertices.size()];
+            XMVECTOR worldPos = XMVector3TransformCoord(XMLoadFloat3(&vertex.Pos), particleWorld);
+            XMStoreFloat3(&particlePos, worldPos);
+        }
+
+        initialParticles[i].Position = particlePos;
+        initialParticles[i].Age = -1.0f;
         initialParticles[i].Velocity = XMFLOAT3(0.0f, 0.0f, 0.0f);
         initialParticles[i].LifetimeScale = 1.0f;
         initialParticles[i].Color = XMFLOAT4(1.0f, 0.55f, 0.12f, 1.0f);
-        initialParticles[i].Size = 1.0f;
+        initialParticles[i].Size = 0.55f;
         initialParticles[i].Seed = 747796405u * (i + 1u) + 2891336453u;
         initialParticles[i].Padding = XMFLOAT2(0.0f, 0.0f);
     }
@@ -1346,6 +1991,9 @@ void RenderingSystem::UpdateCullingMode(const InputDevice& input)
 
 void RenderingSystem::UpdateParticleControls(const InputDevice& input, float dt)
 {
+    if (input.WasKeyPressed(VK_SPACE))
+        mParticlesFalling = true;
+
     const bool fast = input.IsKeyDown(VK_SHIFT);
     const float speedScale = fast ? 3.0f : 1.0f;
     const float emitterSpeed = 35.0f * speedScale * dt;
@@ -1495,8 +2143,8 @@ void RenderingSystem::Update(float totalTime, float deltaTime, const InputDevice
     viewFrustum.Transform(worldFrustum, invView);
     CollectVisibleObjects(worldFrustum);
 
-    mGeometryConstants.TextureTransform = XMFLOAT4(4.0f, 4.0f, 0.0f, 0.0f);
-    mGeometryConstants.EyeDisplacement = XMFLOAT4(mCameraPos.x, mCameraPos.y, mCameraPos.z, 0.35f);
+    mGeometryConstants.TextureTransform = XMFLOAT4(1.0f, 1.0f, 0.0f, 0.0f);
+    mGeometryConstants.EyeDisplacement = XMFLOAT4(mCameraPos.x, mCameraPos.y, mCameraPos.z, 0.0f);
     mGeometryConstants.TessellationParams = XMFLOAT4(2.0f, 1.0f, 55.0f, 330.0f);
     mLightingConstants.EyePosW = mCameraPos;
     XMStoreFloat4x4(&mLightingConstants.View, XMMatrixTranspose(view));
@@ -1524,7 +2172,7 @@ void RenderingSystem::Update(float totalTime, float deltaTime, const InputDevice
     mParticleSimConstants.GravityDeltaTime = XMFLOAT4(0.0f, mParticleGravity, 0.0f, (std::min)(deltaTime, 0.05f));
     mParticleSimConstants.EmitterParams = XMFLOAT4(
         (float)ParticleCount,
-        mParticleSpawnChance,
+        mParticlesFalling ? 1.0f : 0.0f,
         mParticleLifetime,
         mParticleSpread);
 }
@@ -1644,9 +2292,8 @@ std::wstring RenderingSystem::StatusText() const
 {
     std::wostringstream text;
     text << std::fixed << std::setprecision(2);
-    text << L"CG lab6 | CSM+PCF | GPU particles " << ParticleCount
-        << L" | emitter (" << mParticleEmitterPos.x << L"," << mParticleEmitterPos.y << L"," << mParticleEmitterPos.z << L")"
-        << L" | spawn " << mParticleSpawnChance
+    text << L"CG lab6 | CSM+PCF | Gordon vertex particles " << ParticleCount
+        << L" | Space fall " << (mParticlesFalling ? L"on" : L"off")
         << L" | size " << mParticleSizeScale
         << L" | life " << mParticleLifetime
         << L" | grav " << mParticleGravity

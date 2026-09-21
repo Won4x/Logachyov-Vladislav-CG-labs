@@ -52,10 +52,15 @@
     <None Include="GBufferDS.hlsl" />
     <None Include="ModelVS.hlsl" />
     <None Include="ModelPS.hlsl" />
+    <None Include="WaterDS.hlsl" />
+    <None Include="WaterPS.hlsl" />
     <None Include="Assets\DisplacementSphere\Sphere.obj" />
     <None Include="Assets\DisplacementSphere\BrickDiffuse.jpg" />
     <None Include="Assets\DisplacementSphere\BrickNormal.png" />
     <None Include="Assets\DisplacementSphere\BrickDisplacement.png" />
+    <None Include="Assets\Water\WaterDiffuse.png" />
+    <None Include="Assets\Water\WaterNormal.png" />
+    <None Include="Assets\Water\WaterDisplacement.png" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -169,9 +174,11 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Target Name="CopyRuntimeShaders" AfterTargets="Build">
     <MakeDir Directories="$(OutDir)Shaders" />
-    <Copy SourceFiles="CubeVS.hlsl;CubePS.hlsl;ModelVS.hlsl;ModelPS.hlsl;GBufferVS.hlsl;GBufferHS.hlsl;GBufferDS.hlsl;GBufferPS.hlsl;DeferredLightingVS.hlsl;DeferredLightingPS.hlsl" DestinationFolder="$(OutDir)Shaders" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="CubeVS.hlsl;CubePS.hlsl;ModelVS.hlsl;ModelPS.hlsl;GBufferVS.hlsl;GBufferHS.hlsl;GBufferDS.hlsl;GBufferPS.hlsl;WaterDS.hlsl;WaterPS.hlsl;DeferredLightingVS.hlsl;DeferredLightingPS.hlsl" DestinationFolder="$(OutDir)Shaders" SkipUnchangedFiles="true" />
     <MakeDir Directories="$(OutDir)Assets\DisplacementSphere" />
     <Copy SourceFiles="Assets\DisplacementSphere\Sphere.obj;Assets\DisplacementSphere\BrickDiffuse.jpg;Assets\DisplacementSphere\BrickNormal.png;Assets\DisplacementSphere\BrickDisplacement.png" DestinationFolder="$(OutDir)Assets\DisplacementSphere" SkipUnchangedFiles="true" />
+    <MakeDir Directories="$(OutDir)Assets\Water" />
+    <Copy SourceFiles="Assets\Water\WaterDiffuse.png;Assets\Water\WaterNormal.png;Assets\Water\WaterDisplacement.png" DestinationFolder="$(OutDir)Assets\Water" SkipUnchangedFiles="true" />
   </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

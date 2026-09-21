@@ -9,6 +9,7 @@ cbuffer GeometryCB : register(b0)
     float4 gEyeDisplacement;  // xyz = eye position, w = displacement scale.
     float4 gTessellationParams; // x=max, y=min, z=near distance, w=far distance.
     float4 gDemoSphereParams;
+    float4 gWaterParams;
 };
 
 struct VSInput

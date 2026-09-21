@@ -675,7 +675,8 @@ void RenderingSystem::BuildConstantBuffers()
     mLightingConstantByteSize = (sizeof(LightingConstants) + 255) & ~255;
 
     CD3DX12_HEAP_PROPERTIES uploadHeapProps(D3D12_HEAP_TYPE_UPLOAD);
-    const UINT drawConstantCount = (std::max)(1u, (UINT)(mSceneObjects.size() * mRenderSubsets.size()));
+    const UINT perPassConstantCount = (std::max)(1u, (UINT)(mSceneObjects.size() * mRenderSubsets.size()));
+    const UINT drawConstantCount = perPassConstantCount * 2u;
     auto geoDesc = CD3DX12_RESOURCE_DESC::Buffer(mGeometryConstantByteSize * drawConstantCount);
     auto lightDesc = CD3DX12_RESOURCE_DESC::Buffer(mLightingConstantByteSize);
 
@@ -764,12 +765,16 @@ void RenderingSystem::BuildPipelineStates()
     ComPtr<ID3DBlob> gPs;
     ComPtr<ID3DBlob> lVs;
     ComPtr<ID3DBlob> lPs;
+    ComPtr<ID3DBlob> topVs;
+    ComPtr<ID3DBlob> topPs;
     CompileShader(L"Shaders/GBufferVS.hlsl", "VSMain", "vs_5_0", gVs);
     CompileShader(L"Shaders/GBufferHS.hlsl", "HSMain", "hs_5_0", gHs);
     CompileShader(L"Shaders/GBufferDS.hlsl", "DSMain", "ds_5_0", gDs);
     CompileShader(L"Shaders/GBufferPS.hlsl", "PSMain", "ps_5_0", gPs);
     CompileShader(L"Shaders/DeferredLightingVS.hlsl", "VSMain", "vs_5_0", lVs);
     CompileShader(L"Shaders/DeferredLightingPS.hlsl", "PSMain", "ps_5_0", lPs);
+    CompileShader(L"Shaders/TopDownVS.hlsl", "VSMain", "vs_5_0", topVs);
+    CompileShader(L"Shaders/TopDownPS.hlsl", "PSMain", "ps_5_0", topPs);
 
     D3D12_INPUT_ELEMENT_DESC inputLayout[] =
     {
@@ -817,6 +822,24 @@ void RenderingSystem::BuildPipelineStates()
     lightDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     lightDesc.SampleDesc.Count = 1;
     ThrowIfFailed(mDevice->CreateGraphicsPipelineState(&lightDesc, IID_PPV_ARGS(&mLightingPSO)));
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC topDesc = {};
+    topDesc.InputLayout = { inputLayout, _countof(inputLayout) };
+    topDesc.pRootSignature = mGeometryRootSignature.Get();
+    topDesc.VS = { topVs->GetBufferPointer(), topVs->GetBufferSize() };
+    topDesc.PS = { topPs->GetBufferPointer(), topPs->GetBufferSize() };
+    CD3DX12_RASTERIZER_DESC topRasterizer(D3D12_DEFAULT);
+    topRasterizer.CullMode = D3D12_CULL_MODE_NONE;
+    topDesc.RasterizerState = topRasterizer;
+    topDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    topDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+    topDesc.SampleMask = UINT_MAX;
+    topDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    topDesc.NumRenderTargets = 1;
+    topDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    topDesc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+    topDesc.SampleDesc.Count = 1;
+    ThrowIfFailed(mDevice->CreateGraphicsPipelineState(&topDesc, IID_PPV_ARGS(&mTopDownPSO)));
 }
 
 void RenderingSystem::BuildLights()
@@ -1127,6 +1150,87 @@ void RenderingSystem::UploadLightingConstants()
     mLightingConstantBuffer->Unmap(0, nullptr);
 }
 
+void RenderingSystem::DrawTopDownInset(ID3D12GraphicsCommandList* cmdList,
+    D3D12_CPU_DESCRIPTOR_HANDLE backBufferView,
+    D3D12_CPU_DESCRIPTOR_HANDLE depthStencilView)
+{
+    if (!mTopDownPSO || !mOctreeRoot || mSceneObjects.empty())
+        return;
+
+    const LONG margin = 16;
+    const LONG insetSize = (LONG)(std::max)(180.0f, (std::min)(360.0f,
+        (std::min)(mGbuffer->Width(), mGbuffer->Height()) * 0.28f));
+    const LONG left = (LONG)mGbuffer->Width() - insetSize - margin;
+    const LONG top = margin;
+    const LONG right = left + insetSize;
+    const LONG bottom = top + insetSize;
+
+    D3D12_RECT insetRect = { left, top, right, bottom };
+    const float clearColor[] = { 0.015f, 0.02f, 0.025f, 1.0f };
+    cmdList->ClearRenderTargetView(backBufferView, clearColor, 1, &insetRect);
+    cmdList->ClearDepthStencilView(depthStencilView, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL,
+        1.0f, 0, 1, &insetRect);
+
+    D3D12_VIEWPORT insetViewport = {};
+    insetViewport.TopLeftX = (float)left;
+    insetViewport.TopLeftY = (float)top;
+    insetViewport.Width = (float)insetSize;
+    insetViewport.Height = (float)insetSize;
+    insetViewport.MinDepth = 0.0f;
+    insetViewport.MaxDepth = 1.0f;
+    cmdList->RSSetViewports(1, &insetViewport);
+    cmdList->RSSetScissorRects(1, &insetRect);
+    cmdList->OMSetRenderTargets(1, &backBufferView, TRUE, &depthStencilView);
+
+    const BoundingBox& sceneBounds = mOctreeRoot->CellBounds;
+    const float sceneWidth = (std::max)(sceneBounds.Extents.x, sceneBounds.Extents.z) * 2.35f;
+    const XMFLOAT3 center = sceneBounds.Center;
+    XMVECTOR eye = XMVectorSet(center.x, center.y + sceneBounds.Extents.y + 700.0f, center.z, 1.0f);
+    XMVECTOR target = XMVectorSet(center.x, center.y, center.z, 1.0f);
+    XMMATRIX view = XMMatrixLookAtLH(eye, target, XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f));
+    XMMATRIX proj = XMMatrixOrthographicLH(sceneWidth, sceneWidth, 0.1f, 5000.0f);
+
+    cmdList->SetPipelineState(mTopDownPSO.Get());
+    cmdList->SetGraphicsRootSignature(mGeometryRootSignature.Get());
+    cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cmdList->IASetVertexBuffers(0, 1, &mVBV);
+    cmdList->IASetIndexBuffer(&mIBV);
+
+    ID3D12DescriptorHeap* textureHeaps[] = { mTextureHeap.Get() };
+    cmdList->SetDescriptorHeaps(1, textureHeaps);
+    CD3DX12_GPU_DESCRIPTOR_HANDLE fallbackTexture(mTextureHeap->GetGPUDescriptorHandleForHeapStart());
+    cmdList->SetGraphicsRootDescriptorTable(1, fallbackTexture);
+    cmdList->SetGraphicsRootDescriptorTable(2, fallbackTexture);
+    cmdList->SetGraphicsRootDescriptorTable(3, fallbackTexture);
+
+    const UINT topDownConstantBase = (UINT)(mSceneObjects.size() * mRenderSubsets.size());
+    UINT drawConstantIndex = topDownConstantBase;
+
+    for (UINT i = 0; i < (UINT)mRenderSubsets.size(); ++i)
+    {
+        const auto& subset = mRenderSubsets[i];
+
+        for (UINT objectIndex : mVisibleObjectIndices)
+        {
+            GeometryConstants constants = mGeometryConstants;
+            XMMATRIX world = XMLoadFloat4x4(&mSceneObjects[objectIndex].World);
+            XMMATRIX wvp = world * view * proj;
+            XMStoreFloat4x4(&constants.WorldViewProj, XMMatrixTranspose(wvp));
+            XMStoreFloat4x4(&constants.World, XMMatrixTranspose(world));
+            constants.DiffuseColor = XMFLOAT4(0.1f, 0.85f, 0.35f, 1.0f);
+            constants.SpecularColor = XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f);
+            constants.MaterialParams = XMFLOAT4(1.0f, 0.0f, 0.0f, 0.0f);
+
+            UploadGeometryConstants(drawConstantIndex, constants);
+            D3D12_GPU_VIRTUAL_ADDRESS cbAddress =
+                mGeometryConstantBuffer->GetGPUVirtualAddress() + (UINT64)drawConstantIndex * mGeometryConstantByteSize;
+            cmdList->SetGraphicsRootConstantBufferView(0, cbAddress);
+            cmdList->DrawIndexedInstanced(subset.IndexCount, 1, subset.IndexStart, 0, 0);
+            ++drawConstantIndex;
+        }
+    }
+}
+
 void RenderingSystem::Draw(ID3D12GraphicsCommandList* cmdList,
     ID3D12Resource* backBuffer,
     D3D12_CPU_DESCRIPTOR_HANDLE backBufferView,
@@ -1217,6 +1321,8 @@ void RenderingSystem::Draw(ID3D12GraphicsCommandList* cmdList,
     cmdList->IASetVertexBuffers(0, 0, nullptr);
     cmdList->IASetIndexBuffer(nullptr);
     cmdList->DrawInstanced(3, 1, 0, 0);
+
+    DrawTopDownInset(cmdList, backBufferView, depthStencilView);
 
     auto toPresent = CD3DX12_RESOURCE_BARRIER::Transition(
         backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);

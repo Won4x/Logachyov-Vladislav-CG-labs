@@ -22,6 +22,10 @@ Texture2D gAlbedoSpec : register(t0);
 Texture2D gNormalShininess : register(t1);
 Texture2D gPosition : register(t2);
 Texture2DArray<float> gShadowMap : register(t3);
+Texture2D gCascadeCat : register(t4);
+Texture2D gCascadeDog : register(t5);
+Texture2D gCascadeGuineaPig : register(t6);
+Texture2D gCascadeDolphin : register(t7);
 SamplerState gSampler : register(s0);
 SamplerComparisonState gShadowSampler : register(s1);
 
@@ -78,36 +82,46 @@ int SelectCascade(float viewDepth)
     return 3;
 }
 
-float DirectionalShadow(float3 posW, float3 normalW, float3 lightDir)
+float4 SampleCascadeOverlay(int cascade, float2 uv)
+{
+    float2 tiledUv = frac(uv * 50.0f);
+    float4 result = gCascadeDolphin.SampleLevel(gSampler, tiledUv, 0.0f);
+
+    if (cascade == 0)
+        result = gCascadeCat.SampleLevel(gSampler, tiledUv, 0.0f);
+    else if (cascade == 1)
+        result = gCascadeDog.SampleLevel(gSampler, tiledUv, 0.0f);
+    else if (cascade == 2)
+        result = gCascadeGuineaPig.SampleLevel(gSampler, tiledUv, 0.0f);
+
+    return result;
+}
+
+float DirectionalShadow(float3 posW, float3 normalW, float3 lightDir, out int cascade, out float2 shadowUv)
 {
     float viewDepth = mul(float4(posW, 1.0f), gView).z;
-    int cascade = SelectCascade(viewDepth);
+    cascade = SelectCascade(viewDepth);
 
     float4 shadowPos = mul(float4(posW, 1.0f), gShadowViewProj[cascade]);
     shadowPos.xyz /= shadowPos.w;
 
     float2 uv = float2(shadowPos.x * 0.5f + 0.5f, -shadowPos.y * 0.5f + 0.5f);
+    shadowUv = uv;
     if (any(uv < 0.0f) || any(uv > 1.0f) || shadowPos.z < 0.0f || shadowPos.z > 1.0f)
         return 1.0f;
 
     float ndotl = saturate(dot(normalW, lightDir));
     float compareDepth = shadowPos.z - max(gShadowTexelSizeBias.y, gShadowTexelSizeBias.z * (1.0f - ndotl));
     float texelSize = gShadowTexelSizeBias.x;
+    float pcfRadius = texelSize * 0.75f;
     float visibility = 0.0f;
+    visibility += gShadowMap.SampleCmpLevelZero(gShadowSampler, float3(uv + float2(-pcfRadius, -pcfRadius), (float)cascade), compareDepth);
+    visibility += gShadowMap.SampleCmpLevelZero(gShadowSampler, float3(uv + float2( pcfRadius, -pcfRadius), (float)cascade), compareDepth);
+    visibility += gShadowMap.SampleCmpLevelZero(gShadowSampler, float3(uv + float2(-pcfRadius,  pcfRadius), (float)cascade), compareDepth);
+    visibility += gShadowMap.SampleCmpLevelZero(gShadowSampler, float3(uv + float2( pcfRadius,  pcfRadius), (float)cascade), compareDepth);
 
-    [unroll]
-    for (int y = -1; y <= 1; ++y)
-    {
-        [unroll]
-        for (int x = -1; x <= 1; ++x)
-        {
-            float2 offset = float2((float)x, (float)y) * texelSize;
-            visibility += gShadowMap.SampleCmpLevelZero(gShadowSampler, float3(uv + offset, (float)cascade), compareDepth);
-        }
-    }
-
-    visibility /= 9.0f;
-    visibility = visibility * visibility;
+    visibility *= 0.25f;
+    visibility = visibility * visibility * visibility;
     return lerp(gShadowTexelSizeBias.w, 1.0f, visibility);
 }
 
@@ -127,6 +141,8 @@ float4 PSMain(PSInput pin) : SV_Target
     float3 viewDir = SafeNormalize(gEyePosW - position.xyz);
 
     float3 lighting = gAmbientColor.rgb;
+    float3 cascadeOverlayColor = 0.0f;
+    float cascadeOverlayAlpha = 0.0f;
     [loop]
     for (int i = 0; i < (int)gLightCount && i < 16; ++i)
     {
@@ -134,7 +150,14 @@ float4 PSMain(PSInput pin) : SV_Target
         if (i == 0 && gLights[i].Params.x < 0.5f)
         {
             float3 lightDir = SafeNormalize(-gLights[i].DirectionSpot.xyz);
-            lightContribution *= DirectionalShadow(position.xyz, normal, lightDir);
+            int shadowCascade = 0;
+            float2 shadowUv = 0.0f;
+            float shadowVisibility = DirectionalShadow(position.xyz, normal, lightDir, shadowCascade, shadowUv);
+
+            float shadowAmount = saturate(1.0f - shadowVisibility);
+            float4 overlay = SampleCascadeOverlay(shadowCascade, shadowUv);
+            cascadeOverlayColor = overlay.rgb;
+            cascadeOverlayAlpha = shadowAmount * lerp(0.75f, 1.0f, saturate(overlay.a));
         }
         lighting += lightContribution;
     }
@@ -142,5 +165,6 @@ float4 PSMain(PSInput pin) : SV_Target
     float3 color = albedo * lighting;
     color = color / (color + 1.0f);
     color = pow(saturate(color), 1.0f / 2.2f);
+    color = lerp(color, cascadeOverlayColor, saturate(cascadeOverlayAlpha));
     return float4(color, 1.0f);
 }

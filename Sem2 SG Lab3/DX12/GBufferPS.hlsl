@@ -9,6 +9,7 @@ cbuffer GeometryCB : register(b0)
     float4 gEyeDisplacement;
     float4 gTessellationParams;
     float4 gDemoSphereParams;
+    float4 gWaterParams;
 };
 
 Texture2D gDiffuseMap : register(t0);
